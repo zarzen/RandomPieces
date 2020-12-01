@@ -30,12 +30,13 @@ waitSignal(TestControl* c) {
     printf("kernel pointer testcontrol %p\n", c);
     printf("enter kernel, %d\n", c->s);
     waitUntilN(c, 2);
+
     waitUntilN(c, 4);
 }
 
 
 void launchWait(TestControl* c) {
-    dim3 dimGrid(1, 1, 1);
-    dim3 dimBlock(1, 1, 2);
-    waitSignal<<<dimGrid, dimBlock>>>(c);
+    void* args[1] = {&c};
+    // waitSignal<<<dim3(1), dim3(2)>>>(c);
+    cudaLaunchKernel((void*)waitSignal, dim3(1), dim3(2), args, 0, NULL);
 }

@@ -39,7 +39,8 @@ static inline ncclResult_t ncclCudaHostFree(void* ptr) {
 
 void signalLoop(TestControl* c) {
     for (int i = 0; i < 10; i++) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        c->s ++;
     }
 }
 
@@ -53,9 +54,14 @@ int main() {
     }
     printf("pointer testcontrol %p\n", c);
     c->s = 0;
-    // launch kernel
-    launchWait(c);
     std::thread signalThd(signalLoop, c);
+    // launch kernel
+    void* args[1] = {&c};
+    cudaLaunchKernel((void*)waitSignal, dim3(1), dim3(2), args, 0, NULL);
+    
+    printf("kernel launch complete\n");
+    
+    if (signalThd.joinable())
+      signalThd.join();
     ncclCudaHostFree(c);
-    signalThd.join();
 }
