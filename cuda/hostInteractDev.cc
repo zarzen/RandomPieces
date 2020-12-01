@@ -44,6 +44,18 @@ void signalLoop(TestControl* c) {
     }
 }
 
+void readSignalLoop(TestControl* c, int n, bool* exit) {
+  int cached[n] = {0};
+  while (!*exit) {
+      for (int i = 0; i < n; ++i) {
+        if (cached[i] != *(int*)(c->buff + i * 8)) {
+          cached[i] = *(int*)(c->buff + i * 8);
+          printf("cuda-thread-%d update val %d\n", i, cached[i]);
+        }
+      }
+  }
+}
+
 // typedef void (*waitSignal_t)(TestControl* c) ;
 
 int main() {
@@ -54,14 +66,19 @@ int main() {
     }
     printf("pointer testcontrol %p\n", c);
     c->s = 0;
+    int nCudaThreads = 2;
+    bool exit = false;
     std::thread signalThd(signalLoop, c);
+    std::thread readValThd(readSignalLoop, c, nCudaThreads, &exit);
     // launch kernel
     void* args[1] = {&c};
-    cudaLaunchKernel((void*)waitSignal, dim3(1), dim3(2), args, 0, NULL);
+    cudaLaunchKernel((void*)waitSignal, dim3(1), dim3(nCudaThreads), args, 0, NULL);
     
     printf("kernel launch complete\n");
     
     if (signalThd.joinable())
       signalThd.join();
+    exit = true;
+    readValThd.join();
     ncclCudaHostFree(c);
 }

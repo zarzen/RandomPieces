@@ -19,10 +19,9 @@ inline __device__ void waitUntilN(TestControl* c, int n) {
     while (signalCache != n) {
         signalCache = *signalPtr;
     }
-    printf("[%d, %d] wait %d completed\n", blockIdx.y * gridDim.x + blockIdx.x,
-           threadIdx.z * blockDim.x * blockDim.y + threadIdx.y * blockDim.x +
-               threadIdx.x,
-           n);
+    printf("[%d, %d] wait %d completed\n", blockIdx.x, threadIdx.x, n);
+    char* d = c->buff + threadIdx.x * 8;
+    (*(int*)d)++;
 }
 
 __global__ void 
