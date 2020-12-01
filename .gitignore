@@ -1,0 +1,14 @@
+*.bin
+*.o
+GPATH
+GRTAGS
+GTAGS
+build
+compile_commands.json
+.clangd/
+.vscode/
+.python-version
+.ipynb_checkpoints
+
+__pycache__/
+tmp-data/
