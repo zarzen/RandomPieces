@@ -58,6 +58,22 @@ void readSignalLoop(TestControl* c, int n, bool* exit) {
 
 // typedef void (*waitSignal_t)(TestControl* c) ;
 
+bool accessibleAtHost(void* ptr, int device) {
+  cudaSetDevice(device);
+
+  cudaError_t err;
+  cudaPointerAttributes attr;
+  err = cudaPointerGetAttributes(&attr, ptr);
+  switch (attr.type) {
+    case cudaMemoryTypeUnregistered:
+      return true;
+    case cudaMemoryTypeHost:
+      return true;
+    default:
+      return false;
+  }
+}
+
 int main() {
     TestControl* c;
     ncclResult_t ret = ncclCudaHostCalloc(&c, 1);
@@ -65,6 +81,13 @@ int main() {
         std::cerr << "allocation failed\n";
     }
     printf("pointer testcontrol %p\n", c);
+    printf("Testcontrol pointer accessable at host <%s>\n", accessibleAtHost(c, 0)? "true": "false");
+    void* hostMalloc = malloc(10);
+    printf("Host malloc pointer accessable at host <%s>\n", accessibleAtHost(hostMalloc, 0)? "true": "false");
+    void* cudaMallocPtr;
+    cudaMalloc(&cudaMallocPtr, 10);
+    printf("cudaMalloc pointer accessable at host <%s>\n", accessibleAtHost(cudaMallocPtr, 0)? "true": "false");
+    
     c->s = 0;
     int nCudaThreads = 2;
     bool exit = false;
