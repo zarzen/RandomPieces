@@ -39,3 +39,35 @@ void launchWait(TestControl* c) {
     // waitSignal<<<dim3(1), dim3(2)>>>(c);
     cudaLaunchKernel((void*)waitSignal, dim3(1), dim3(2), args, 0, NULL);
 }
+
+template <class T>
+__global__ static void SumKernel(T* b1, T* b2, size_t nelem) {
+  int index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index >= nelem)
+    return;
+  b1[index] += b2[index];
+}
+#define BLOCK 512
+inline dim3 cuda_gridsize_1d(int n) {
+  int x = (n - 1) / BLOCK + 1;
+  dim3 d = {(uint)x, 1, 1};
+  return d;
+}
+
+void sumTwoBufferToFirst(void* b1, void* b2, size_t count, cudaStream_t stream) {
+  SumKernel<float><<<cuda_gridsize_1d(count), BLOCK, 0, stream>>>(
+      (float*)b1, (float*)b2, count);
+}
+
+void StreamCreate(cudaStream_t *stream){
+  int greatest_priority;
+  cudaError_t err;
+  err = cudaDeviceGetStreamPriorityRange(NULL, &greatest_priority);
+  if (err != cudaSuccess) {
+    printf("error happend while cudaDeviceGetStreamPriorityRange\n");
+  }
+  err = cudaStreamCreateWithPriority(stream, cudaStreamNonBlocking, greatest_priority);
+  if (err != cudaSuccess) {
+    printf("error while cudaStreamCreateWithPriority\n");
+  }
+}

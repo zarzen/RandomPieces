@@ -25,4 +25,11 @@ set_property(TARGET interactTest PROPERTY CUDA_ARCHITECTURES 70 72 75)
 set_target_properties(interactTest
                        PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 target_include_directories(interactTest PUBLIC ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
-target_link_libraries(interactTest pthread)
+  target_link_libraries(interactTest pthread)
+
+add_executable(summationTest testSummation.cc kernels.cu kernels.h)
+set_property(TARGET summationTest PROPERTY CUDA_ARCHITECTURES 70 72 75)
+set_target_properties(summationTest
+                       PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+target_include_directories(summationTest PUBLIC ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+
