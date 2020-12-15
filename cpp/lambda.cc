@@ -24,5 +24,13 @@ int main(int argc, char* argv[]) {
   printf("a get v %d \n", *a->v);
   *a->v = 32;
   printf("modified a->v %d, p %d \n", *a->v, *p);
+
+  std::function<void()> f1 = [](){};
+  f1();
+  std::function<void()> f2;
+  if (f2 == nullptr) {
+    printf("f2 is null");
+  }
+
   return 0;
 }
