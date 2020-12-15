@@ -12,3 +12,6 @@ compile_commands.json
 
 __pycache__/
 tmp-data/
+
+log.txt
+a.out
