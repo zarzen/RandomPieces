@@ -120,8 +120,8 @@ int main(int argc, char* argv[])
   printf("rank %d send/recv %d bytes from offset %d to rank %d\n", myRank, exchange_bytes, offset, target);
   //rank0: send(offset_0, count_2, to_rank_1); recv(offset_0, count_2, from_rank_1);
   //rank1: send(offset_2, count_2, to_rank_0); recv(offset_2, count_2, from_rank_0);
-  NCCLCHECK(ncclSend(sendbuff + offset, exchange_bytes, ncclFloat, target, comm, s));
-  NCCLCHECK(ncclRecv(sendbuff + offset, exchange_bytes, ncclFloat, target, comm, s));
+  NCCLCHECK(ncclSend(sendbuff + offset, slice, ncclFloat, target, comm, s));
+  NCCLCHECK(ncclRecv(sendbuff + offset, slice, ncclFloat, target, comm, s));
   NCCLCHECK(ncclGroupEnd());
 
   //completing NCCL operation by synchronizing on the CUDA stream
@@ -129,7 +129,7 @@ int main(int argc, char* argv[])
 
   //check result
   CUDACHECK(cudaMemcpy(result, sendbuff, size * sizeof(float), cudaMemcpyDeviceToHost));
-  printf("AllReduced result for rank %d = [", localRank);
+  printf("AllReduced result for rank %d = [", myRank);
   for(int i = 0; i < size; ++i){
     printf(" %f,", result[i]);
   }
