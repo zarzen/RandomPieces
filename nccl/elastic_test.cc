@@ -34,6 +34,16 @@ using std::unordered_map;
     }                                                               \
   } while (0)
 
+#define NCCLCHECK(cmd)                                              \
+  do {                                                              \
+    ncclResult_t rank = cmd;                                        \
+    if (rank != ncclSuccess) {                                      \
+      printf("Failed, NCCL error %s:%d '%s'\n", __FILE__, __LINE__, \
+             ncclGetErrorString(rank));                             \
+      throw "nccl error";                                           \
+    }                                                               \
+  } while (0)
+
 void ipStringToInts(std::string& ip, int* ret) {
   std::istringstream is(ip);
   std::string i;
@@ -74,6 +84,7 @@ struct WorkerStates {
   bool init_once = false;
   bool control_link_ready = false;
   bool self_info_ready = false;
+  bool memory_ready = false;
 };
 
 struct CtrlMsg {
@@ -179,7 +190,7 @@ void workerControllerLoop(int listen_port) {
   std::cout << "worker controller passed third stage\n";
 
   // fourth stage wait for certain time then drop one worker
-  std::this_thread::sleep_for(std::chrono::seconds(40));
+  std::this_thread::sleep_for(std::chrono::seconds(5));
   std::cout << "worker controller after first sleep\n";
 
   // fifth stage pause all workers
@@ -199,6 +210,7 @@ void workerControllerLoop(int listen_port) {
   CtrlMsg msg;
   msg.type = ctrl_type_t::Shutdown;
   drop_w_conn->send(&msg, sizeof(msg));
+  std::cout << "send shutdown to ip " << drop_w_conn->getIP() << '\n';
   // update workers info
   std::vector<WorkerInfo> updated_infos;
   std::vector<shared_ptr<sdcc::TCPAgent>> updated_conns;
@@ -209,24 +221,29 @@ void workerControllerLoop(int listen_port) {
       updated_conns.push_back(workers[i]);
     }
   }
-  for (int i = 0; updated_infos.size(); ++i) {
+  for (int i = 0; i < updated_infos.size(); ++i) {
     updated_infos[i].world_size--;
     updated_infos[i].rank = i;
     updated_infos[i].listen_port = BASE_PORT + i;
     // ip and local_rank do not change
+    std::cout << "update info " << i << " \n ";
   }
-
+  std::cout << "computed updated infos size " << updated_infos.size() << "\n";
   // send reset and info of each node
   for (int i = 0; i < updated_infos.size(); ++i) {
     shared_ptr<sdcc::TCPAgent>& w_conn = updated_conns[i];
-      CtrlMsg msg;
-      msg.type = ctrl_type_t::Reset;
-      WorkerInfo w_info = updated_infos[i];
-      w_info.is_you = true; // update self info
-      msg.worker_info = w_info;
+    if (w_conn == nullptr) {
+      std::cerr << "w_conn " << i << " is nullptr\n";
+    }
+    CtrlMsg msg;
+    msg.type = ctrl_type_t::Reset;
+    WorkerInfo w_info = updated_infos[i];
+    w_info.is_you = true;  // update self info
+    msg.worker_info = w_info;
 
-      w_conn->send(&msg, sizeof(msg));
+    w_conn->send(&msg, sizeof(msg));
   }
+  std::cout << "send out updated infos\n";
   // send other node info
   for(int i = 0; i < updated_infos.size(); ++i) {
     shared_ptr<sdcc::TCPAgent>& w_conn = updated_conns[i];
@@ -239,6 +256,7 @@ void workerControllerLoop(int listen_port) {
         msg.worker_info = w_info;
 
         w_conn->send(&msg, sizeof(msg));
+        std::cout << "send to " << i << ", " << j << "\n";
       }
     }
   }
@@ -282,7 +300,7 @@ void resetNcclComm(shared_ptr<sdcc::TCPClient>& to_controller,
     msg.type = PushNcclId;
     msg.nccl_id = id;
     to_controller->send((char*)&msg, sizeof(msg));
-    std::cout << "rank 0 sent out the ncclUniqueId\n";
+    std::cout << "rank 0 sent out the ncclUniqueId " << "\n";
     cudaSetDevice(local_rank);
     result = ncclCommInitRank(comm, world_size, id, rank);
   } else {
@@ -290,6 +308,8 @@ void resetNcclComm(shared_ptr<sdcc::TCPClient>& to_controller,
     to_controller->recv((char*)&msg, sizeof(msg));
     assert(msg.type == PushNcclId);
     cudaSetDevice(local_rank);
+    std::cout << "received ncclUniqueId " << " local rank "
+              << local_rank << "\n";
     result = ncclCommInitRank(comm, world_size, msg.nccl_id, rank);
   }
   if (result != ncclSuccess) {
@@ -341,9 +361,17 @@ void resetConnections(CtrlMsg& msg,
   _local_thd.join();
   state.control_link_ready = true;
   std::cout << "tcp control with pre and next node estabilished\n";
-
+  double _start_t = std::chrono::high_resolution_clock::now()
+                                  .time_since_epoch()
+                                  .count() /
+                              1e6;
   resetNcclComm(to_controller, self_info.world_size, self_info.rank,
                 self_info.local_rank, &(state.nccl_comm), state.init_once);
+  double _end_t = std::chrono::high_resolution_clock::now()
+                                  .time_since_epoch()
+                                  .count() /
+                              1e6;
+  std::cout << "setup nccl communicator cost (ms) " << _end_t - _start_t << "\n";
   state.init_once = true;
 }
 
@@ -364,10 +392,10 @@ bool checkControlMessage(shared_ptr<sdcc::TCPClient>& to_controller,
   // to_controller->recv(&msg, sizeof(msg));
   
   if (received_bytes > 0) {
-    std::cout << "received bytes " << received_bytes << "\n";
+    // std::cout << "received bytes " << received_bytes << "\n";
     if (received_bytes < sizeof(msg))
       to_controller->recv((&msg) + received_bytes, sizeof(msg) - received_bytes);
-    std::cout << "received msg type " << msg.type << "\n";
+    // std::cout << "received msg type " << msg.type << "\n";
     switch(msg.type) {
       case ctrl_type_t::Shutdown:
         exit = true;
@@ -382,6 +410,11 @@ bool checkControlMessage(shared_ptr<sdcc::TCPClient>& to_controller,
         // followed by reset
         std::cout << "received Pause\n";
         to_controller->recv(&msg, sizeof(msg));
+        if (msg.type == ctrl_type_t::Shutdown) {
+          exit = true;
+          std::cout << "rank " << self_info.rank << " exiting \n";
+          break;
+        }
       case ctrl_type_t::Reset: {
         states.self_info_ready = false;
         states.control_link_ready = false;
@@ -405,7 +438,7 @@ bool checkControlMessage(shared_ptr<sdcc::TCPClient>& to_controller,
     }
     return true;
   } else {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // std::this_thread::sleep_for(std::chrono::milliseconds(100));
     return false;
   }
 }
@@ -441,15 +474,16 @@ bool ncclSendRecvOnce(WorkerStates& states,
     });
     send_thd.join();
     recv_thd.join();
+    // std::cout << "send receive meta data done\n";
 
-    ncclGroupStart();
-    ncclSend(send_buff, send_count, ncclFloat32, next_rank, states.nccl_comm, states.cuda_stream);
-    ncclRecv(recv_buff, recv_count, ncclFloat32, pre_rank, states.nccl_comm, states.cuda_stream);
-    ncclGroupEnd();
+    CUDACHECK(cudaSetDevice(self_info.local_rank));
+    NCCLCHECK(ncclGroupStart());
+    NCCLCHECK(ncclSend(send_buff, send_count, ncclFloat32, next_rank, states.nccl_comm, states.cuda_stream));
+    NCCLCHECK(ncclRecv(recv_buff, recv_count, ncclFloat32, pre_rank, states.nccl_comm, states.cuda_stream));
+    NCCLCHECK(ncclGroupEnd());
 
-    cudaSetDevice(self_info.local_rank);
-    cudaStreamSynchronize(states.cuda_stream);
-
+    CUDACHECK(cudaStreamSynchronize(states.cuda_stream));
+    // std::cout << "send recv complete once\n";
   } catch (const std::exception& e) {
     std::cerr << "nccl runing into error " << e.what() << "\n";
     ret = false;
@@ -467,15 +501,21 @@ void workerInitSetup();
 
 void initCudaMemory(WorkerInfo& self_info,
                     WorkerStates& state,
-                    void* send_buff,
+                    void*& send_buff,
                     size_t send_count,
-                    void* recv_buff,
+                    void*& recv_buff,
                     size_t recv_count) {
   CUDACHECK(cudaSetDevice(self_info.local_rank));
   CUDACHECK(cudaMalloc(&send_buff, send_count * sizeof(float)));
   CUDACHECK(cudaMalloc(&recv_buff, recv_count * sizeof(float)));
   CUDACHECK(cudaMemset(recv_buff, 0, recv_count * sizeof(float)));
-  CUDACHECK(cudaStreamCreate(&(state.cuda_stream)));
+  CUDACHECK(cudaMemset(send_buff, 1, send_count * sizeof(float)));
+  cudaStream_t stream;
+  CUDACHECK(cudaStreamCreate(&stream));
+  state.cuda_stream = stream;
+
+  CUDACHECK(cudaStreamSynchronize(state.cuda_stream));
+  std::cout << "after init send buff ptr " << send_buff << "\n";
 }
 
 int main(int argc, char* argv[]) {
@@ -496,13 +536,14 @@ int main(int argc, char* argv[]) {
   shared_ptr<std::thread> controller_thread;
   if (rank == 0) {
     controller_thread = std::make_shared<std::thread>(workerControllerLoop, controller_port);
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
 
-  float* send_buff;
+  void* send_buff;
   size_t send_count = 1 * 1024 * 1024;
-  float* recv_buff;
+  void* recv_buff;
   size_t recv_count = 1 * 1024 * 1024;
+
+  float* host_buff = new float[send_count];
 
   atomic<bool> exit(false);
   // connect to controller
@@ -512,22 +553,38 @@ int main(int argc, char* argv[]) {
 
   WorkerStates states;
   WorkerInfo self_info;
+
   unordered_map<int, WorkerInfo> other_workers;
   shared_ptr<sdcc::TCPServer> local_server;
   shared_ptr<sdcc::TCPAgent> to_next;
   shared_ptr<sdcc::TCPAgent> from_pre;
+  int c = 0;
   while (!exit) {
     checkControlMessage(to_controller, exit, self_info, other_workers,
                         local_server, to_next, from_pre, states);
-    if (send_buff == nullptr && states.self_info_ready) {
+    
+    if (states.init_once && !states.memory_ready) {
+      std::cout << "initing memory\n";
       initCudaMemory(self_info, states, send_buff, send_count, recv_buff,
                      recv_count);
-    }
-    bool res = ncclSendRecvOnce(states, self_info, send_buff, send_count, recv_buff,
-                     recv_count, to_next, from_pre, 0);
 
-    if (!res) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      states.memory_ready = true;
+
+      std::cout << "send buff " << (void*) send_buff << "\n";
+    }
+    if (states.memory_ready){
+      
+      CUDACHECK(cudaMemcpy(send_buff, host_buff, send_count * sizeof(float),
+                           ::cudaMemcpyDefault));
+      CUDACHECK(cudaMemcpy(recv_buff, host_buff, send_count * sizeof(float),
+                           ::cudaMemcpyDefault));
+      bool res = ncclSendRecvOnce(states, self_info, send_buff, send_count,
+                                  recv_buff, recv_count, to_next, from_pre, 0);
+      if (!res) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      } else {
+        // std::cout << "completed send recv " << c++ << "\n";
+      }
     }
   }
 
