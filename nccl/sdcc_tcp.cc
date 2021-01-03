@@ -169,16 +169,24 @@ int TCPAgent::send(const void* data, size_t size) {
 
 int TCPAgent::recv(void* data, size_t size) {
   auto ret = ::recv(_conn_fd, data, size, MSG_WAITALL);
-  if (ret != size) {
-    LOG_ERROR("tcp recv failed, return %zu, size %zu, error msg %s", ret, size,
-              strerror(errno));
-    return ERRNO_TCP;
-  }
-  return ERRNO_SUCCESS;
+  // if (ret != size) {
+  //   LOG_ERROR("tcp recv failed, return %zu, size %zu, error msg %s", ret, size,
+  //             strerror(errno));
+  //   return ERRNO_TCP;
+  // }
+  // return ERRNO_SUCCESS;
+  return ret;
 }
 
 int TCPAgent::irecv(void* data, size_t size) {
-  auto bytes = ::recv(_conn_fd, data, size, MSG_DONTWAIT);
+  int bytes = ::recv(_conn_fd, data, size, MSG_DONTWAIT);
+  if (bytes == -1) {
+    if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
+      std::cerr << "Call to recv failed : " << strerror(errno);
+    } else {
+      bytes = 0;
+    }
+  }
   return bytes;
 }
 
@@ -305,6 +313,7 @@ TCPClient::TCPClient(string address, int port, bool noDelay)
   EXIT_ON_ERR(inet_pton(AF_INET, _address.c_str(), &serv_addr.sin_addr) <= 0,
               "util/common/TCPClient ConvertStringAddress");
   int repeat = 0;
+  this->_addr = serv_addr;
   while (connect(_conn_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) <
          0) {
     LOG_DEBUG("error while connecting to %s:%d, try in 50ms", _address.c_str(),

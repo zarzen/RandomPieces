@@ -72,6 +72,8 @@ struct WorkerStates {
   ncclComm_t nccl_comm;
   cudaStream_t cuda_stream;
   bool init_once = false;
+  bool control_link_ready = false;
+  bool self_info_ready = false;
 };
 
 struct CtrlMsg {
@@ -103,23 +105,28 @@ void workerControllerLoop(int listen_port) {
   int BASE_PORT = 10000;
   shared_ptr<sdcc::TCPServer> server =
       std::make_shared<sdcc::TCPServer>("0.0.0.0", listen_port, 100, true);
-  std::cout << "start controller loop\n";
+  std::cout << "start controller server " << listen_port << "\n";
 
   std::vector<shared_ptr<sdcc::TCPAgent>> workers;
+  workers.reserve(initial_setup.size());
+
   // first stage wait for all workers
-  // and reply with the port number they should listen on (for other workers)
   for (int i = 0; i < initial_setup.size(); ++i) {
     // accept the client, and get their ip, then match with initial setup
-    shared_ptr<sdcc::TCPAgent> worker = server->acceptCli(true);
-    workers.push_back(worker);
-    std::string cli_ip = worker->getIP();
+    shared_ptr<sdcc::TCPAgent> w_conn = server->acceptCli(true);
+
+    std::string cli_ip = w_conn->getIP();
     // match ip and give port 
     int rank = getIpIndex(cli_ip, initial_setup);
     if (rank == -1) {
       std::cerr << __FILE__ << ":" << __LINE__ << ": getIpIndex error\n";
     }
+    std::cout << "get connection from ip " << cli_ip << " rank " << rank
+              << " fd " << w_conn->getFd() << '\n';
+
     int port = BASE_PORT + rank;
     initial_setup[rank].listen_port = port;
+    workers[rank] = w_conn;
   }
   std::cout << "worker controller pass first stage\n";
 
@@ -130,16 +137,18 @@ void workerControllerLoop(int listen_port) {
     WorkerInfo w_info = initial_setup[i];
     w_info.is_you = true;
     CtrlMsg msg;
-    msg.worker_info = std::move(w_info);
+    msg.worker_info = w_info;
     msg.type = ctrl_type_t::Reset;
 
     w_conn->send((char*)&msg, sizeof(msg));
+    std::cout << "sent worker rank " << msg.worker_info.rank << "\n";
   }
   std::cout << "worker controller passed second stage\n";
 
   // third stage send other workers info to each worker
   for (int i = 0; i < initial_setup.size(); ++i) {
     shared_ptr<sdcc::TCPAgent>& w_conn = workers[i];
+
     for (int j = 0; j < initial_setup[i].world_size; ++j) {
       if (j != i) {
         WorkerInfo w_info = initial_setup[j];
@@ -152,12 +161,14 @@ void workerControllerLoop(int listen_port) {
       }
     }
   }
+  std::cout << "send other workers info to each worker\n";
 
   // third + additional wait for NcclUniqueId from rank 0
   // then broadcast to others
   {
     shared_ptr<sdcc::TCPAgent>& rank0_conn = workers[0];
     CtrlMsg msg;
+    std::cout << "wait receive ncclUniqueId from rank 0\n";
     rank0_conn->recv((char*)&msg, sizeof(msg));
     assert(msg.type == ctrl_type_t::PushNcclId);
     for (int i = 1; i < initial_setup.size(); ++i) {
@@ -254,12 +265,12 @@ void workerControllerLoop(int listen_port) {
   std::cout << "worker controller send out Shutdown\n";
 }
 
-void resetNcclComm(shared_ptr<sdcc::TCPAgent>& to_controller,
-                       int world_size,
-                       int rank,
-                       int local_rank,
-                       ncclComm_t* comm,
-                       bool init_before) {
+void resetNcclComm(shared_ptr<sdcc::TCPClient>& to_controller,
+                   int world_size,
+                   int rank,
+                   int local_rank,
+                   ncclComm_t* comm,
+                   bool init_before) {
   ncclResult_t result;
   if (init_before) {
     ncclCommDestroy(*comm);
@@ -271,6 +282,7 @@ void resetNcclComm(shared_ptr<sdcc::TCPAgent>& to_controller,
     msg.type = PushNcclId;
     msg.nccl_id = id;
     to_controller->send((char*)&msg, sizeof(msg));
+    std::cout << "rank 0 sent out the ncclUniqueId\n";
     cudaSetDevice(local_rank);
     result = ncclCommInitRank(comm, world_size, id, rank);
   } else {
@@ -287,10 +299,11 @@ void resetNcclComm(shared_ptr<sdcc::TCPAgent>& to_controller,
 
 void acceptPreWorker(shared_ptr<sdcc::TCPServer>& local_server, shared_ptr<sdcc::TCPAgent>& tcp_from_pre) {
   tcp_from_pre = local_server->acceptCli(true);
+  std::cout << "accepted pre_worker connection \n";
 }
 
 void resetConnections(CtrlMsg& msg,
-                      shared_ptr<sdcc::TCPAgent>& to_controller,
+                      shared_ptr<sdcc::TCPClient>& to_controller,
                       WorkerInfo& self_info,
                       unordered_map<int, WorkerInfo>& other_workers,
                       shared_ptr<sdcc::TCPServer>& local_server,
@@ -299,17 +312,25 @@ void resetConnections(CtrlMsg& msg,
                       WorkerStates& state) {
   assert(msg.worker_info.is_you == true);
   self_info = msg.worker_info;
-  local_server.reset();  // close current server
+  state.self_info_ready = true;
+
+  if (local_server != nullptr)
+    local_server.reset();  // close current server
+
   local_server = std::make_shared<sdcc::TCPServer>(
       "0.0.0.0", self_info.listen_port, 10, true);
   std::thread _local_thd(acceptPreWorker, std::ref(local_server),
                          std::ref(tcp_from_pre));
+  std::cout << "started local server at port " << self_info.listen_port << "\n";
   other_workers.clear();
+  // receive 
   for (int i = 0; i < self_info.world_size - 1; ++i) {
     CtrlMsg other_w_info;
     to_controller->recv(&other_w_info, sizeof(other_w_info));
     assert(other_w_info.type == ctrl_type_t::SendWorkerInfo);
     other_workers[other_w_info.worker_info.rank] = other_w_info.worker_info;
+    std::cout << "received other worker rank " << other_w_info.worker_info.rank
+              << "\n";
   }
 
   int next_rank = (self_info.rank + 1) % self_info.world_size;
@@ -318,6 +339,8 @@ void resetConnections(CtrlMsg& msg,
   tcp_to_next = std::make_shared<sdcc::TCPClient>(
       ipStr(next_worker.worker_ip), next_worker.listen_port, true);
   _local_thd.join();
+  state.control_link_ready = true;
+  std::cout << "tcp control with pre and next node estabilished\n";
 
   resetNcclComm(to_controller, self_info.world_size, self_info.rank,
                 self_info.local_rank, &(state.nccl_comm), state.init_once);
@@ -328,7 +351,7 @@ void resetConnections(CtrlMsg& msg,
 // ping: check the status, reply with ping
 // reset: receive following information about the world, and build the ncclComm_t
 // shutdown: exit
-void checkControlMessage(shared_ptr<sdcc::TCPAgent>& to_controller,
+bool checkControlMessage(shared_ptr<sdcc::TCPClient>& to_controller,
                          atomic<bool>& exit,
                          WorkerInfo& self_info,
                          unordered_map<int, WorkerInfo>& other_workers,
@@ -337,11 +360,14 @@ void checkControlMessage(shared_ptr<sdcc::TCPAgent>& to_controller,
                          shared_ptr<sdcc::TCPAgent>& tcp_from_pre,
                          WorkerStates& states) {
   CtrlMsg msg;
-  int received_bytes = 0;
-  received_bytes = to_controller->irecv(&msg, sizeof(msg));
-  if (received_bytes > 0 && received_bytes < sizeof(msg)) {
-    to_controller->recv((&msg) + received_bytes, sizeof(msg) - received_bytes);
-
+  int received_bytes = to_controller->irecv(&msg, sizeof(msg));
+  // to_controller->recv(&msg, sizeof(msg));
+  
+  if (received_bytes > 0) {
+    std::cout << "received bytes " << received_bytes << "\n";
+    if (received_bytes < sizeof(msg))
+      to_controller->recv((&msg) + received_bytes, sizeof(msg) - received_bytes);
+    std::cout << "received msg type " << msg.type << "\n";
     switch(msg.type) {
       case ctrl_type_t::Shutdown:
         exit = true;
@@ -357,6 +383,9 @@ void checkControlMessage(shared_ptr<sdcc::TCPAgent>& to_controller,
         std::cout << "received Pause\n";
         to_controller->recv(&msg, sizeof(msg));
       case ctrl_type_t::Reset: {
+        states.self_info_ready = false;
+        states.control_link_ready = false;
+        std::cout << "received reset msg self_info rank " << msg.worker_info.rank << "\n";
         double _start_reset = std::chrono::high_resolution_clock::now()
                                   .time_since_epoch()
                                   .count() /
@@ -374,6 +403,10 @@ void checkControlMessage(shared_ptr<sdcc::TCPAgent>& to_controller,
         std::cerr << "unhandled clause msg type" << msg.type << std::endl;
         break;
     }
+    return true;
+  } else {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    return false;
   }
 }
 
@@ -391,6 +424,10 @@ bool ncclSendRecvOnce(WorkerStates& states,
   int pre_rank =
       (self_info.rank - 1 + self_info.world_size) % self_info.world_size;
   bool ret = true;
+  if (!states.control_link_ready) {
+    // std::cout << "control link not ready\n";
+    return false;
+  }
   try {
     // mock send receive through tcp control link for meta data exchange;
     std::thread send_thd([&to_next](){
@@ -443,7 +480,7 @@ void initCudaMemory(WorkerInfo& self_info,
 
 int main(int argc, char* argv[]) {
   workerInitSetup();
-  basic_tests();
+  // basic_tests();
   // setup memory and get initial mpi world and rank
   int rank, nranks;
   MPICHECK(MPI_Init(&argc, &argv));
@@ -456,8 +493,10 @@ int main(int argc, char* argv[]) {
   std::string worker_controller_ip(argv[1]);
 
   int controller_port = 5555;
+  shared_ptr<std::thread> controller_thread;
   if (rank == 0) {
-    std::thread controller_thread(workerControllerLoop, controller_port);
+    controller_thread = std::make_shared<std::thread>(workerControllerLoop, controller_port);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
 
   float* send_buff;
@@ -467,8 +506,10 @@ int main(int argc, char* argv[]) {
 
   atomic<bool> exit(false);
   // connect to controller
-  shared_ptr<sdcc::TCPAgent> to_controller = std::make_shared<sdcc::TCPClient>(
-      worker_controller_ip, controller_port, true);
+  shared_ptr<sdcc::TCPClient> to_controller;
+  to_controller = std::make_shared<sdcc::TCPClient>(worker_controller_ip,
+                                                    controller_port, true);
+
   WorkerStates states;
   WorkerInfo self_info;
   unordered_map<int, WorkerInfo> other_workers;
@@ -478,12 +519,20 @@ int main(int argc, char* argv[]) {
   while (!exit) {
     checkControlMessage(to_controller, exit, self_info, other_workers,
                         local_server, to_next, from_pre, states);
-    if (send_buff == nullptr) {
+    if (send_buff == nullptr && states.self_info_ready) {
       initCudaMemory(self_info, states, send_buff, send_count, recv_buff,
                      recv_count);
     }
-    ncclSendRecvOnce(states, self_info, send_buff, send_count, recv_buff,
+    bool res = ncclSendRecvOnce(states, self_info, send_buff, send_count, recv_buff,
                      recv_count, to_next, from_pre, 0);
+
+    if (!res) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  }
+
+  if (rank == 0 && controller_thread->joinable()) {
+    controller_thread->join();
   }
 }
 
