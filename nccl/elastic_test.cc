@@ -446,7 +446,7 @@ bool checkControlMessage(shared_ptr<sdcc::TCPClient>& to_controller,
         std::cout << "received shutdown signal\n";
         return false;
       case ctrl_type_t::Ping:
-        std::cout << "received Ping\n";
+        // std::cout << "received Ping\n";
         to_controller->send(&msg, sizeof(msg));
         return true;
       case ctrl_type_t::Pause:
@@ -627,7 +627,7 @@ int main(int argc, char* argv[]) {
       if (!res) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
       } else {
-        std::cout << "completed send recv " << c++ << "\n";
+        // std::cout << "completed send recv " << c++ << "\n";
       }
     }
   }
