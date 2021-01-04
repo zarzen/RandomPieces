@@ -655,34 +655,22 @@ void basic_tests() {
 
 void workerInitSetup() {
   // **************** initialize worker info setup
-  WorkerInfo worker0; 
-  worker0.world_size = 3;
-  worker0.rank = 0;
-  worker0.local_rank = 0;
-  int ip0[4] = {172,31,88,106};
-  memcpy(worker0.worker_ip, ip0, 4 * sizeof(int));
-  worker0.listen_port = 0; // init port all zeros, the control loop will set it
-
-  WorkerInfo worker1;
-  worker1.world_size = 3;
-  worker1.rank = 1;
-  worker1.local_rank = 0;
-  int ip1[4] = {172,31,76,23};
-  memcpy(worker1.worker_ip, ip1, 4 * sizeof(int));
-  worker1.listen_port = 0;
-
-  WorkerInfo worker2;
-  worker2.world_size = 3;
-  worker2.rank = 2;
-  worker2.local_rank = 0;
-  int ip2[4] = {172,31,79,244};
-  memcpy(worker2.worker_ip, ip2, 4 * sizeof(int));
-  worker2.listen_port = 0;
-
-  initial_setup.push_back(worker0);
-  initial_setup.push_back(worker1);
-  initial_setup.push_back(worker2);
-
+  std::vector<std::string> ip_strs{
+    "172.31.69.158", "172.31.74.133", "172.31.76.170", 
+    "172.31.78.247", "172.31.68.14", "172.31.69.189"
+  };
+  
+  for (int i = 0; i < ip_strs.size(); ++i) {
+    WorkerInfo w;
+    w.world_size = ip_strs.size();
+    w.rank = i;
+    w.local_rank = 0;
+    int w_ip[4];
+    ipStringToInts(ip_strs[i], w_ip);
+    memcpy(w.worker_ip, w_ip, 4 * sizeof(int));
+    w.listen_port = 0;
+    initial_setup.push_back(w);
+  }
   // **************** end init setup
 }
 
