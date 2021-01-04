@@ -120,7 +120,7 @@ void workerControllerLoop(int listen_port) {
 
   std::vector<shared_ptr<sdcc::TCPAgent>> workers;
   workers.reserve(initial_setup.size());
-
+  workers.resize(initial_setup.size());
   // first stage wait for all workers
   for (int i = 0; i < initial_setup.size(); ++i) {
     // accept the client, and get their ip, then match with initial setup
@@ -139,7 +139,8 @@ void workerControllerLoop(int listen_port) {
     initial_setup[rank].listen_port = port;
     workers[rank] = w_conn;
   }
-  std::cout << "worker controller pass first stage\n";
+  std::cout << "worker controller pass first stage, workers size "
+            << workers.size() << "\n";
 
   // second stage send the port back to worker, for them to start the listen
   for (int i = 0; i < initial_setup.size(); ++i) {
@@ -189,8 +190,27 @@ void workerControllerLoop(int listen_port) {
   }
   std::cout << "worker controller passed third stage\n";
 
+  std::atomic<bool> _ping_stop(false);
+  std::thread _ping_thread([&workers, &_ping_stop](){
+    std::cout << "workers size " << workers.size() << "\n";
+    while(!_ping_stop) {
+      CtrlMsg msg;
+      msg.type = ctrl_type_t::Ping;
+      for (int i = 0; i < workers.size(); ++i) {
+        workers[i]->send(&msg, sizeof(msg));
+      }
+      for (int i = 0; i < workers.size(); ++i) {
+        workers[i]->recv(&msg, sizeof(msg));
+        assert(msg.type == ctrl_type_t::Ping);
+      }
+      std::cout << "1 send&recv ping\n";
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+  });
   // fourth stage wait for certain time then drop one worker
-  std::this_thread::sleep_for(std::chrono::seconds(5));
+  std::this_thread::sleep_for(std::chrono::seconds(10));
+  _ping_stop = true;
+  _ping_thread.join();
   std::cout << "worker controller after first sleep\n";
 
   // fifth stage pause all workers
@@ -273,8 +293,28 @@ void workerControllerLoop(int listen_port) {
   }
   std::cout << "worker controller broadcast ncclUniqueId\n";
 
-  // wait for another 30 seconds to shutdown all nodes
-  std::this_thread::sleep_for(std::chrono::seconds(30));
+  atomic<bool> _sec_ping_stop(false);
+  std::thread _sec_ping([&updated_conns, &_sec_ping_stop](){
+    while(!_sec_ping_stop) {
+      CtrlMsg msg;
+      msg.type = Ping;
+      for (int i = 0; i<updated_conns.size(); ++i) {
+        updated_conns[i]->send(&msg, sizeof(msg));
+      }
+      for (int i=0; i < updated_conns.size(); ++i) {
+        updated_conns[i]->recv(&msg, sizeof(msg));
+        assert(msg.type == Ping);
+      }
+      std::cout << "2 send&recv ping\n";
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+  });
+  // wait for another seconds to shutdown all nodes
+  std::this_thread::sleep_for(std::chrono::seconds(5));
+  _sec_ping_stop = true;
+  _sec_ping.join();
+  std::cout <<"worker controller after second sleep\n";
+
   for (int i = 0; i < updated_conns.size(); ++i) {
     CtrlMsg msg;
     msg.type = ctrl_type_t::Shutdown;
@@ -334,11 +374,14 @@ void resetConnections(CtrlMsg& msg,
   self_info = msg.worker_info;
   state.self_info_ready = true;
 
-  if (local_server != nullptr)
-    local_server.reset();  // close current server
-
-  local_server = std::make_shared<sdcc::TCPServer>(
+  // if (local_server != nullptr)
+  //   local_server.reset();  // close current server
+  if (local_server != nullptr && local_server->getPort() == self_info.listen_port) {
+  } else {
+    local_server = std::make_shared<sdcc::TCPServer>(
       "0.0.0.0", self_info.listen_port, 10, true);
+  }
+
   std::thread _local_thd(acceptPreWorker, std::ref(local_server),
                          std::ref(tcp_from_pre));
   std::cout << "started local server at port " << self_info.listen_port << "\n";
@@ -358,6 +401,7 @@ void resetConnections(CtrlMsg& msg,
   WorkerInfo& next_worker = other_workers[next_rank];
   tcp_to_next = std::make_shared<sdcc::TCPClient>(
       ipStr(next_worker.worker_ip), next_worker.listen_port, true);
+  std::cout << "tcp conn to next worker established\n";
   _local_thd.join();
   state.control_link_ready = true;
   std::cout << "tcp control with pre and next node estabilished\n";
@@ -400,20 +444,22 @@ bool checkControlMessage(shared_ptr<sdcc::TCPClient>& to_controller,
       case ctrl_type_t::Shutdown:
         exit = true;
         std::cout << "received shutdown signal\n";
-        break;
+        return false;
       case ctrl_type_t::Ping:
         std::cout << "received Ping\n";
-        // currently not useful
         to_controller->send(&msg, sizeof(msg));
-        break;
+        return true;
       case ctrl_type_t::Pause:
         // followed by reset
         std::cout << "received Pause\n";
+        // reset local_server
+        tcp_to_next.reset();
+        tcp_from_pre.reset();
         to_controller->recv(&msg, sizeof(msg));
         if (msg.type == ctrl_type_t::Shutdown) {
           exit = true;
           std::cout << "rank " << self_info.rank << " exiting \n";
-          break;
+          return false;
         }
       case ctrl_type_t::Reset: {
         states.self_info_ready = false;
@@ -431,12 +477,11 @@ bool checkControlMessage(shared_ptr<sdcc::TCPClient>& to_controller,
                             1e6;
         std::cout << "reset connection cost (ms)" << _end_reset - _start_reset
                   << "\n";
-      } break;
+      } return false; break;
       default:
         std::cerr << "unhandled clause msg type" << msg.type << std::endl;
         break;
     }
-    return true;
   } else {
     // std::this_thread::sleep_for(std::chrono::milliseconds(100));
     return false;
@@ -560,10 +605,9 @@ int main(int argc, char* argv[]) {
   shared_ptr<sdcc::TCPAgent> from_pre;
   int c = 0;
   while (!exit) {
-    checkControlMessage(to_controller, exit, self_info, other_workers,
+    bool check_res = checkControlMessage(to_controller, exit, self_info, other_workers,
                         local_server, to_next, from_pre, states);
-    
-    if (states.init_once && !states.memory_ready) {
+    if (check_res && states.init_once && !states.memory_ready) {
       std::cout << "initing memory\n";
       initCudaMemory(self_info, states, send_buff, send_count, recv_buff,
                      recv_count);
@@ -572,7 +616,7 @@ int main(int argc, char* argv[]) {
 
       std::cout << "send buff " << (void*) send_buff << "\n";
     }
-    if (states.memory_ready){
+    if (check_res && states.memory_ready && !exit && states.self_info_ready){
       
       CUDACHECK(cudaMemcpy(send_buff, host_buff, send_count * sizeof(float),
                            ::cudaMemcpyDefault));
@@ -583,13 +627,16 @@ int main(int argc, char* argv[]) {
       if (!res) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
       } else {
-        // std::cout << "completed send recv " << c++ << "\n";
+        std::cout << "completed send recv " << c++ << "\n";
       }
     }
   }
 
+  std::cout << "exit\n";
+
   if (rank == 0 && controller_thread->joinable()) {
     controller_thread->join();
+    std::cout << "joined controller\n";
   }
 }
 
