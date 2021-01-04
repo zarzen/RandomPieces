@@ -203,7 +203,7 @@ void workerControllerLoop(int listen_port) {
         workers[i]->recv(&msg, sizeof(msg));
         assert(msg.type == ctrl_type_t::Ping);
       }
-      std::cout << "1 send&recv ping\n";
+      // std::cout << "1 send&recv ping\n";
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
   });
@@ -305,7 +305,7 @@ void workerControllerLoop(int listen_port) {
         updated_conns[i]->recv(&msg, sizeof(msg));
         assert(msg.type == Ping);
       }
-      std::cout << "2 send&recv ping\n";
+      // std::cout << "2 send&recv ping\n";
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
   });
