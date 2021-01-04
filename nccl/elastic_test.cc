@@ -15,6 +15,13 @@ using std::shared_ptr;
 using std::atomic;
 using std::unordered_map;
 
+double now_in_ms(){
+  return std::chrono::high_resolution_clock::now()
+                                  .time_since_epoch()
+                                  .count() /
+                              1e6;
+}
+
 #define MPICHECK(cmd)                                                  \
   do {                                                                 \
     int e = cmd;                                                       \
@@ -342,7 +349,9 @@ void resetNcclComm(shared_ptr<sdcc::TCPClient>& to_controller,
     to_controller->send((char*)&msg, sizeof(msg));
     std::cout << "rank 0 sent out the ncclUniqueId " << "\n";
     cudaSetDevice(local_rank);
+    double _before_call = now_in_ms();
     result = ncclCommInitRank(comm, world_size, id, rank);
+    std::cout << "call ncclCommInitRank cost (ms) " << now_in_ms() - _before_call << "\n";
   } else {
     CtrlMsg msg;
     to_controller->recv((char*)&msg, sizeof(msg));
@@ -350,7 +359,9 @@ void resetNcclComm(shared_ptr<sdcc::TCPClient>& to_controller,
     cudaSetDevice(local_rank);
     std::cout << "received ncclUniqueId " << " local rank "
               << local_rank << "\n";
+    double _before_call = now_in_ms();
     result = ncclCommInitRank(comm, world_size, msg.nccl_id, rank);
+    std::cout << "call ncclCommInitRank cost (ms) " << now_in_ms() - _before_call << "\n";
   }
   if (result != ncclSuccess) {
     printf("resetNcclComm error");
@@ -657,9 +668,9 @@ void workerInitSetup() {
   // **************** initialize worker info setup
   std::vector<std::string> ip_strs{
     "172.31.69.158", "172.31.74.133", "172.31.76.170", 
-    "172.31.78.247", "172.31.68.14", "172.31.69.189"
+    "172.31.78.247", "172.31.68.14"
   };
-  
+
   for (int i = 0; i < ip_strs.size(); ++i) {
     WorkerInfo w;
     w.world_size = ip_strs.size();
