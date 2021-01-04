@@ -668,7 +668,7 @@ void workerInitSetup() {
   // **************** initialize worker info setup
   std::vector<std::string> ip_strs{
     "172.31.69.158", "172.31.74.133", "172.31.76.170", 
-    "172.31.78.247", "172.31.68.14"
+    "172.31.78.247"
   };
 
   for (int i = 0; i < ip_strs.size(); ++i) {
