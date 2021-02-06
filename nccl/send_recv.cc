@@ -106,7 +106,7 @@ int main(int argc, char* argv[])
   cudaEventCreate(&stop);
 
   for (int i = 0; i < 9; ++i) {
-    size_t trans_bytes = (size_t) pow(2, i);
+    size_t trans_bytes = (size_t) pow(2, i) * 1024 * 1024;
     size_t count = trans_bytes / sizeof(float);
     vector<float> time_costs;
 
@@ -123,7 +123,7 @@ int main(int argc, char* argv[])
       cudaEventElapsedTime(&milliseconds, start, stop);
       time_costs.push_back(milliseconds);
     }
-    float avg = std::accumulate(time_costs.begin(), time_costs.end(), 0) / time_costs.size();
+    double avg = std::accumulate(time_costs.begin(), time_costs.end(), 0.0) / time_costs.size();
     printf("buffer size %zu, send&recv cost %f ms\n", trans_bytes, avg);
   }
 
