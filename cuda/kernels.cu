@@ -41,13 +41,20 @@ void launchWait(TestControl* c) {
 }
 
 template <class T>
-__global__ static void SumKernel(T* b1, T* b2, size_t nelem) {
-  int index = blockIdx.x * blockDim.x + threadIdx.x;
-  if (index >= nelem)
-    return;
-  b1[index] += b2[index];
+__global__ static void SumKernel(T* b1, T* b2, size_t nelem, int gridx, int blockx) {
+  // int index = blockIdx.x * blockDim.x + threadIdx.x;
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  int nthd = gridx * blockx;
+  size_t thread_step = nelem / nthd;
+  size_t offset = thread_step * tid;
+  size_t remain = nelem - thread_step * nthd;
+  if (tid == nthd - 1) thread_step += remain;
+  for (int i = 0; i < thread_step; ++i) {
+    if (offset + i >= nelem) return;
+    b1[offset+i] += b2[offset+i];
+  }
 }
-#define BLOCK 512
+#define BLOCK 640
 inline dim3 cuda_gridsize_1d(int n) {
   int x = (n - 1) / BLOCK + 1;
   dim3 d = {(uint)x, 1, 1};
@@ -55,8 +62,9 @@ inline dim3 cuda_gridsize_1d(int n) {
 }
 
 void sumTwoBufferToFirst(void* b1, void* b2, size_t count, cudaStream_t stream) {
-  SumKernel<float><<<cuda_gridsize_1d(count), BLOCK, 0, stream>>>(
-      (float*)b1, (float*)b2, count);
+  // dim3 grid = {2,1,1};
+  SumKernel<float><<<2, BLOCK, 0, stream>>>(
+      (float*)b1, (float*)b2, count, 2, BLOCK);
 }
 
 void StreamCreate(cudaStream_t *stream){
