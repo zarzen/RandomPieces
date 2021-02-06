@@ -3,7 +3,7 @@
     ip-172-31-88-106:1,ip-172-31-76-23:1 \
     -bind-to none -map-by slot \
     -x HOROVOD_HOSTS="172.31.88.106 172.31.76.23" \
-    -x LD_LIBRARY_PATH=/opt/amazon/openmpi/lib:$LD_LIBRARY_PATH \
+    -x LD_LIBRARY_PATH=/opt/amazon/openmpi/lib:/home/ubuntu/nccl/build:$LD_LIBRARY_PATH \
     -x HOROVOD_LOG_LEVEL=TRACE \
     -tag-output \
     -mca pml ob1 \
