@@ -112,6 +112,7 @@ int main(int argc, char* argv[])
 
     for (int j = 0; j < 50; ++j) {
       cudaEventRecord(start);
+      NCCLCHECK(ncclGroupStart());
       NCCLCHECK(ncclSend(sendbuff, count, ncclFloat, peer, comm, s));
       NCCLCHECK(ncclRecv(recvbuff, count, ncclFloat, peer, comm, s));
       NCCLCHECK(ncclGroupEnd());
