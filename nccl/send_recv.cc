@@ -8,8 +8,10 @@
 #include <math.h>
 #include <vector>
 #include <numeric>
+#include <string>
 
 using std::vector;
+int nDevices = 4;
 
 #define MPICHECK(cmd) do {                          \
   int e = cmd;                                      \
@@ -62,7 +64,7 @@ static void getHostName(char* hostname, int maxlen) {
 }
 
 void initNccl(int* argc, char*** argv, ncclComm_t& comm, int& myRank, int& nRanks, int& local_rank) {
-  int nDevices = 4;
+  
   //initializing MPI
   MPICHECK(MPI_Init(argc, argv));
   MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &myRank));
@@ -72,6 +74,7 @@ void initNccl(int* argc, char*** argv, ncclComm_t& comm, int& myRank, int& nRank
   if (myRank == 0) ncclGetUniqueId(&id);
   MPICHECK(MPI_Bcast((void *)&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD));
   local_rank = myRank % nDevices;
+  printf("local_rank %d\n", local_rank);
   cudaSetDevice(local_rank);
   //initializing NCCL
   NCCLCHECK(ncclCommInitRank(&comm, nRanks, id, myRank));
@@ -81,6 +84,9 @@ void initNccl(int* argc, char*** argv, ncclComm_t& comm, int& myRank, int& nRank
 
 int main(int argc, char* argv[])
 {
+  if (argc > 1) {
+    nDevices = std::stoi(argv[1]);
+  }
   int myRank, nRanks, local_rank;
   int next_peer, pre_peer;
   ncclComm_t comm;
