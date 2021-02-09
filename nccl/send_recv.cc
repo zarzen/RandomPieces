@@ -81,11 +81,13 @@ void initNccl(int* argc, char*** argv, ncclComm_t& comm, int& myRank, int& nRank
 
 int main(int argc, char* argv[])
 {
-  int myRank, nRanks, peer, local_rank;
+  int myRank, nRanks, local_rank;
+  int next_peer, pre_peer;
   ncclComm_t comm;
   initNccl(&argc, &argv, comm, myRank, nRanks, local_rank);
-  peer = (myRank + 1) % nRanks;
-  printf("rank %d send/recv to peer %d\n", myRank, peer);
+  next_peer = (myRank + 1) % nRanks;
+  pre_peer = (myRank+nRanks - 1) % nRanks;
+  printf("rank %d, local rank %d, send to %d, receive from %d \n", myRank, local_rank, next_peer, pre_peer);
 
   int buffer_size = 256 *  1024 * 1024;
   float *sendbuff, *recvbuff, *result, *data_val;
@@ -115,8 +117,8 @@ int main(int argc, char* argv[])
     for (int j = 0; j < 50; ++j) {
       cudaEventRecord(start);
       NCCLCHECK(ncclGroupStart());
-      NCCLCHECK(ncclSend(sendbuff, count, ncclFloat, peer, comm, s));
-      NCCLCHECK(ncclRecv(recvbuff, count, ncclFloat, peer, comm, s));
+      NCCLCHECK(ncclSend(sendbuff, count, ncclFloat, next_peer, comm, s));
+      NCCLCHECK(ncclRecv(recvbuff, count, ncclFloat, pre_peer, comm, s));
       NCCLCHECK(ncclGroupEnd());
       cudaEventRecord(stop);
       //completing NCCL operation by synchronizing on the CUDA stream
