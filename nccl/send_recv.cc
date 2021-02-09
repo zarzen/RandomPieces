@@ -61,7 +61,8 @@ static void getHostName(char* hostname, int maxlen) {
   }
 }
 
-void initNccl(int* argc, char*** argv, ncclComm_t& comm, int& myRank, int& nRanks) {
+void initNccl(int* argc, char*** argv, ncclComm_t& comm, int& myRank, int& nRanks, int& local_rank) {
+  int nDevices = 4;
   //initializing MPI
   MPICHECK(MPI_Init(argc, argv));
   MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &myRank));
@@ -70,7 +71,8 @@ void initNccl(int* argc, char*** argv, ncclComm_t& comm, int& myRank, int& nRank
   ncclUniqueId id;
   if (myRank == 0) ncclGetUniqueId(&id);
   MPICHECK(MPI_Bcast((void *)&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD));
-
+  local_rank = myRank % nDevices;
+  cudaSetDevice(local_rank);
   //initializing NCCL
   NCCLCHECK(ncclCommInitRank(&comm, nRanks, id, myRank));
   printf("[MPI Rank %d] Success \n", myRank);
@@ -79,9 +81,9 @@ void initNccl(int* argc, char*** argv, ncclComm_t& comm, int& myRank, int& nRank
 
 int main(int argc, char* argv[])
 {
-  int myRank, nRanks, peer;
+  int myRank, nRanks, peer, local_rank;
   ncclComm_t comm;
-  initNccl(&argc, &argv, comm, myRank, nRanks);
+  initNccl(&argc, &argv, comm, myRank, nRanks, local_rank);
   peer = (myRank + 1) % nRanks;
   printf("rank %d send/recv to peer %d\n", myRank, peer);
 
@@ -93,7 +95,7 @@ int main(int argc, char* argv[])
   result = (float*)malloc(buffer_size);
 
   //picking a GPU based on localRank, allocate device buffers
-  CUDACHECK(cudaSetDevice(0));
+  CUDACHECK(cudaSetDevice(local_rank));
   CUDACHECK(cudaMalloc(&sendbuff, buffer_size));
   CUDACHECK(cudaMalloc(&recvbuff, buffer_size));
   //assign value to sendbuff
