@@ -13,6 +13,64 @@ vectorAdd(const float *A, const float *B, float *C, int numElements)
     }
 }
 
+__global__ void dataMove(const volatile float* src, volatile float* dst, size_t count) {
+  int n_threads = blockDim.x;
+  int steps = count / n_threads;
+  int remain = count - (steps * n_threads);
+  int tid = blockDim.x * blockIdx.x + threadIdx.x;
+  int offset_idx = tid * steps;
+  if (tid == n_threads - 1) {
+    steps += remain;
+  }
+  int c = 0;
+  while (c < steps) {
+    dst[offset_idx + c] = src[offset_idx + c];
+    ++c;
+  }
+}
+
+inline __device__ void Store128(Pack128* p, const Pack128* v) {
+  asm volatile("st.volatile.global.v2.u64 [%0], {%1,%2};" :: "l"(p), "l"(v->x), "l"(v->y) : "memory");
+}
+
+// inline __device__ void Store256(Pack256* p, const Pack256* v) {
+//   asm volatile("st.volatile.global.v4.u64 [%0], {%1,%2,%3,%4};" :: "l"(p), "l"(v->x), "l"(v->y), "l"(v->w), "l"(v->z): "memory");
+// }
+
+__global__ void pack128Move(const Pack128* src, Pack128* dst, size_t count) {
+  int n_threads = gridDim.x * blockDim.x;
+  int steps = count / n_threads;
+  int remain = count - (steps * n_threads);
+  int tid = blockDim.x * blockIdx.x + threadIdx.x;
+  int offset_idx = tid * steps;
+  if (tid == n_threads - 1) {
+    steps += remain;
+  }
+  int c = 0;
+  while (c < steps) {
+    Store128(dst+offset_idx+c, src+offset_idx+c);
+    ++c;
+  }
+}
+
+// 7_kernels.compute_70.ptx, line 537; error   : Vector type too large, exceeds 128 bit limit
+// __global__ void pack256Move(const Pack256* src, Pack256* dst, size_t count) {
+//   int n_threads = blockDim.x;
+//   int steps = count / n_threads;
+//   int remain = count - (steps * n_threads);
+//   int tid = blockDim.x * blockIdx.x + threadIdx.x;
+//   int offset_idx = tid * steps;
+//   if (tid == n_threads - 1) {
+//     steps += remain;
+//   }
+//   int c = 0;
+//   while (c < steps) {
+//     // Store128(dst+offset_idx+c, src+offset_idx+c);
+//     Store256(dst+offset_idx+c, src+offset_idx+c);
+//     ++c;
+//   }
+// }
+
 inline __device__ void waitUntilN(TestControl* c, int n) {
     volatile int* signalPtr = &c->s;
     int signalCache = *signalPtr;

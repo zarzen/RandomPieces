@@ -33,3 +33,15 @@ set_target_properties(summationTest
                        PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 target_include_directories(summationTest PUBLIC ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
 
+add_executable(matrixAdd matrix_add.cu)
+set_property(TARGET matrixAdd PROPERTY CUDA_ARCHITECTURES 70 72 75)
+set_target_properties(matrixAdd
+                       PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+target_include_directories(matrixAdd PUBLIC ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
+
+
+add_executable(dataAssign data_assign.cc kernels.cu kernels.h)
+set_property(TARGET dataAssign PROPERTY CUDA_ARCHITECTURES 70 72 75)
+set_target_properties(dataAssign
+                       PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+target_include_directories(dataAssign PUBLIC ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})

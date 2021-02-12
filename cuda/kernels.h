@@ -10,6 +10,41 @@ struct TestControl {
     char buff[128];
 };
 
+#define BUFFER_SLOTS 4
+#define SLOT_SIZE 1024*1024 // 1MB 
+
+struct CircularBuffer {
+    int capacity = BUFFER_SLOTS;
+    uint64_t head = 0;
+    uint64_t tail = BUFFER_SLOTS;
+    uint64_t consumer_head = 0; // head pointer of consumer
+    void* data_buffers[BUFFER_SLOTS];
+    uint32_t data_sizes[BUFFER_SLOTS];
+    int count() {return capacity - (tail-head);};
+};
+
+struct Communicator {
+    void* mem_for_send;
+    void* mem_for_receive;
+    
+};
+
+struct ControlContext {
+    int peer; // currently not used
+    Communicator* comm;
+};
+
+__global__ void sendDataOnGPU(const void* src, ControlContext* ctx);
+
+__global__ void dataMove(const volatile float* src, volatile float* dst, size_t count);
+
+typedef ulong2 Pack128;
+typedef ulong4 Pack256;
+__global__ void pack128Move(const Pack128* src, Pack128* dst, size_t count);
+
+__global__ void pack256Move(const Pack256* src, Pack256* dst, size_t count);
+
+
 __global__ void vectorAdd(const float* A,
                           const float* B,
                           float* C,
