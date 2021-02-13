@@ -13,6 +13,7 @@ struct TestControl {
 #define BUFFER_SLOTS 4
 #define SLOT_SIZE 1024*1024 // 1MB 
 #define UNROLL 4
+#define WARP_SIZE 32
 
 struct CircularBuffer {
     int capacity = BUFFER_SLOTS;
@@ -41,7 +42,7 @@ __global__ void dataMove(const volatile float* src, volatile float* dst, size_t 
 
 typedef ulong2 Pack128;
 typedef ulong4 Pack256;
-__global__ void pack128Move(const Pack128* src, Pack128* dst, size_t count);
+__global__ void pack128Move(const Pack128* src, Pack128* dst, int count);
 
 __global__ void pack256Move(const Pack256* src, Pack256* dst, size_t count);
 
