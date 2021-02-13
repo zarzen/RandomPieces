@@ -12,6 +12,7 @@ struct TestControl {
 
 #define BUFFER_SLOTS 4
 #define SLOT_SIZE 1024*1024 // 1MB 
+#define UNROLL 4
 
 struct CircularBuffer {
     int capacity = BUFFER_SLOTS;

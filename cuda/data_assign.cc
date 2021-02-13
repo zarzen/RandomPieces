@@ -15,7 +15,7 @@ void init_gpu_mem(float* cpu_mem, float* gpu_mem, int nelem) {
 }
 
 int main() {
-    int nelem = 1024 * 1024 / 4;
+    int nelem = 1024 * 1024/4;
     void* host_mem1 = malloc(sizeof(float) * nelem);
     void* shm_cpu_gpu;
     cudaHostAlloc(&shm_cpu_gpu, nelem * sizeof(float), cudaHostAllocMapped);
@@ -41,7 +41,7 @@ int main() {
         // cudaLaunchKernel((void*)dataMove, dim3(1), dim3(512), args, 0, NULL);
         int pack128_elems = nelem / (sizeof(Pack128) / sizeof(float));
         void* args[3] = {&gpu_mem, &shm_cpu_gpu, &pack128_elems};
-        cudaLaunchKernel((void*)pack128Move, dim3(2), dim3(128), args, 0, NULL);
+        cudaLaunchKernel((void*)pack128Move, dim3(2), dim3(256), args, 0, NULL);
         cudaEventRecord(stop);
         cudaEventSynchronize(stop);
         float cost_ms;

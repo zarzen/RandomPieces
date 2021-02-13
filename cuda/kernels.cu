@@ -29,8 +29,12 @@ __global__ void dataMove(const volatile float* src, volatile float* dst, size_t 
   }
 }
 
-inline __device__ void Store128(Pack128* p, const Pack128* v) {
-  asm volatile("st.volatile.global.v2.u64 [%0], {%1,%2};" :: "l"(p), "l"(v->x), "l"(v->y) : "memory");
+inline __device__ void Fetch128(Pack128& v, const Pack128* p) {
+  asm volatile("ld.volatile.global.v2.u64 {%0,%1}, [%2];" : "=l"(v.x), "=l"(v.y) : "l"(p) : "memory");
+}
+
+inline __device__ void Store128(Pack128* p, Pack128& v) {
+  asm volatile("st.volatile.global.v2.u64 [%0], {%1,%2};" :: "l"(p), "l"(v.x), "l"(v.y) : "memory");
 }
 
 // inline __device__ void Store256(Pack256* p, const Pack256* v) {
@@ -47,9 +51,23 @@ __global__ void pack128Move(const Pack128* src, Pack128* dst, size_t count) {
     steps += remain;
   }
   int c = 0;
+  if ((steps % UNROLL) != 0) {
+    printf("steps mode UNROLL != 0, return\n");
+    return;
+  }
   while (c < steps) {
-    Store128(dst+offset_idx+c, src+offset_idx+c);
-    ++c;
+    Pack128 vals[UNROLL];
+    #pragma unroll
+    for (int u = 0; u < UNROLL; ++u) {
+      Fetch128(vals[u], src+offset_idx+c+u);
+    }
+
+    #pragma unroll
+    for (int u = 0; u < UNROLL; ++u) {
+      Store128(dst+offset_idx+c+u, vals[u]);
+    }
+
+    c+=UNROLL;
   }
 }
 
