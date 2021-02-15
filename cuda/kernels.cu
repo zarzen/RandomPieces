@@ -42,6 +42,7 @@ inline __device__ void Store128(Pack128* p, Pack128& v) {
 // }
 
 __global__ void pack128Move(const Pack128* src, Pack128* dst, int count) {
+  // printf("pack128Move, src %p, dst %p\n", (void*)src, (void*)dst);
   int nthreads = gridDim.x * blockDim.x;
   int tid = blockDim.x * blockIdx.x + threadIdx.x;
   int w = tid / WARP_SIZE;       // Warp number

@@ -46,7 +46,7 @@ set_target_properties(dataAssign
                        PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 target_include_directories(dataAssign PUBLIC ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
 
-add_executable(intraSendRecv intra_send_recv.cu shared_memory.cpp sem_wrapper.cpp kernels.cu)
+add_executable(intraSendRecv intra_send_recv.cu shared_memory.cpp sem_wrapper.cpp kernels.cu kernels.h)
 set_property(TARGET intraSendRecv PROPERTY CUDA_ARCHITECTURES 70 72 75)
 set_target_properties(intraSendRecv
                        PROPERTIES CUDA_SEPARABLE_COMPILATION ON)

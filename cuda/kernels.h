@@ -9,6 +9,7 @@
   do {                                                              \
     cudaError_t e = cmd;                                            \
     if (e != cudaSuccess) {                                         \
+      e = cudaGetLastError(); \
       printf("Failed: Cuda error %s:%d '%s'\n", __FILE__, __LINE__, \
              cudaGetErrorString(e));                                \
       throw "cuda check failed";                                    \
