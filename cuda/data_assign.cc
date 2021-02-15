@@ -15,7 +15,7 @@ void init_gpu_mem(float* cpu_mem, float* gpu_mem, int nelem) {
 }
 
 int main() {
-    int nelem = 1024 * 1024;
+    int nelem = 1024 * 1024/4;
     void* host_mem1 = malloc(sizeof(float) * nelem);
     void* shm_cpu_gpu;
     cudaHostAlloc(&shm_cpu_gpu, nelem * sizeof(float), cudaHostAllocMapped);
@@ -24,7 +24,7 @@ int main() {
     cudaMalloc(&gpu_mem, nelem * sizeof(float));
 
     init_gpu_mem((float*)host_mem1, (float*)gpu_mem, nelem);
-    printf("pack128 is %d floats\n", sizeof(Pack128) / sizeof(float));
+    printf("pack128 is %lu floats\n", sizeof(Pack128) / sizeof(float));
     
     cudaEvent_t start, stop;
     cudaEventCreate(&start);

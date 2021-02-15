@@ -5,6 +5,16 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+#define CUDACHECK(cmd)                                              \
+  do {                                                              \
+    cudaError_t e = cmd;                                            \
+    if (e != cudaSuccess) {                                         \
+      printf("Failed: Cuda error %s:%d '%s'\n", __FILE__, __LINE__, \
+             cudaGetErrorString(e));                                \
+      throw "cuda check failed";                                    \
+    }                                                               \
+  } while (0)
+
 struct TestControl {
     int s;
     char buff[128];

@@ -15,16 +15,6 @@ typedef enum { ncclSuccess                 =  0,
                ncclInvalidUsage            =  5,
                ncclNumResults              =  6 } ncclResult_t;
 
-// Check CUDA calls
-#define CUDACHECK(cmd)                                                 \
-  do {                                                                 \
-    cudaError_t err = cmd;                                             \
-    if (err != cudaSuccess) {                                          \
-      std::cerr << "Cuda failure " << cudaGetErrorString(err) << "\n"; \
-      return ncclUnhandledCudaError;                                   \
-    }                                                                  \
-  } while (false)
-
 template <typename T>
 static ncclResult_t ncclCudaHostCalloc(T** ptr, size_t nelem) {
   CUDACHECK(cudaHostAlloc(ptr, nelem*sizeof(T), cudaHostAllocMapped));
