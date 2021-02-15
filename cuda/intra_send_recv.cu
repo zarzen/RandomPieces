@@ -12,15 +12,17 @@
 template<typename T>
 void initBuffers(void** host_buff, void** gpu_send, void** gpu_recv, int nelem) {
     *host_buff = malloc(sizeof(T) * nelem);
-    cudaMalloc(gpu_send, sizeof(T) * nelem);
-    cudaMalloc(gpu_recv, sizeof(T) * nelem);
+    CUDACHECK(cudaMalloc(gpu_send, sizeof(T) * nelem));
+    CUDACHECK(cudaMalloc(gpu_recv, sizeof(T) * nelem));
 
     T* rand_arr = (T*) *host_buff;
     for (int i = 0; i < nelem; ++i) {
         T e = static_cast<T>(rand()) / static_cast<T>(RAND_MAX);
         rand_arr[i] = e;
     }
-    cudaMemcpy(gpu_send, host_buff, sizeof(T) * nelem, cudaMemcpyDefault);
+    printf("3\n");
+    CUDACHECK(cudaMemcpy(*gpu_send, *host_buff, sizeof(T) * nelem, cudaMemcpyDefault));
+    printf("4\n");
 }
 
 int main(int argc, char const *argv[]) {
@@ -35,15 +37,17 @@ int main(int argc, char const *argv[]) {
 
     cudaSetDevice(device_id);
     SharedMemory shm(SharedMemory::OpenType::e_open_or_create, "shm_send_recv");
+    printf("1\n");
     int slot_size = sizeof(int) + sizeof(cudaIpcMemHandle_t);
     shm.truncate(slot_size * n_devices);
-    // SemaphoreMutex sem(NamedSemaphore::OpenType::e_open_or_create, "sem_send_recv");
+    printf("2\n");
 
     void* host_buff;
     void* gpu_send_buff;
     void* gpu_recv_buff;
 
     initBuffers<float>(&host_buff, &gpu_send_buff, &gpu_recv_buff, nelem);
+    printf("after init buffers\n");
 
     int n_pack = sizeof(Pack128) / sizeof(float);
     assert(((nelem / n_pack) % UNROLL) == 0);
@@ -59,6 +63,7 @@ int main(int argc, char const *argv[]) {
     *handle_ptr = ipc_handle;
     int* flag_ptr = (int*)shm_ptr;
     *flag_ptr = 1;
+    printf("saved cudaIpcMemHandle_t in shm\n");
 
     // send to next peer
     int peer = (device_id + 1) % n_devices;
