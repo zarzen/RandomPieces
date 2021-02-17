@@ -37,6 +37,10 @@ inline __device__ void Store128(Pack128* p, Pack128& v) {
   asm volatile("st.volatile.global.v2.u64 [%0], {%1,%2};" :: "l"(p), "l"(v.x), "l"(v.y) : "memory");
 }
 
+inline __device__ void directStore128(Pack128* p, const Pack128* v) {
+  asm volatile("st.volatile.global.v2.u64 [%0], {%1,%2};" :: "l"(p), "l"(v->x), "l"(v->y) : "memory");
+}
+
 // inline __device__ void Store256(Pack256* p, const Pack256* v) {
 //   asm volatile("st.volatile.global.v4.u64 [%0], {%1,%2,%3,%4};" :: "l"(p), "l"(v->x), "l"(v->y), "l"(v->w), "l"(v->z): "memory");
 // }
@@ -70,6 +74,31 @@ __global__ void pack128Move(const Pack128* src, Pack128* dst, int count) {
     dst += inc;
     offset += inc;
     
+  }
+
+}
+
+__global__ void pack128MoveUnroll1(const Pack128* src, Pack128* dst, int count) {
+  // printf("pack128Move, src %p, dst %p\n", (void*)src, (void*)dst);
+  int nthreads = gridDim.x * blockDim.x;
+  int tid = blockDim.x * blockIdx.x + threadIdx.x;
+  int w = tid / WARP_SIZE;       // Warp number
+  int nw = nthreads / WARP_SIZE; // Number of warps
+  int t = tid % WARP_SIZE;       // Thread (inside the warp)
+
+  int inc = nw * WARP_SIZE;
+  int offset = w * WARP_SIZE + t;
+  // printf("tid %d, w %d, nw %d, t %d, inc %d, offset %d, count %d\n", tid, w, nw, t, inc, offset, count);
+
+  src = src+offset;
+  dst += offset;
+
+  while (offset < count) {
+    directStore128(dst, src);
+
+    src += inc;
+    dst += inc;
+    offset += inc;
   }
 
 }

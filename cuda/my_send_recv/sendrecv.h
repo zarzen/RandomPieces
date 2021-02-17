@@ -10,6 +10,8 @@
 #define MEM_SLOT_SIZE 1024 * 1024  // in bytes
 #define CACHE_LINE_SIZE 128
 
+typedef unsigned long handle_t;
+
 // network, shm, p2p through this interface
 class Connection {
  public:
@@ -35,19 +37,26 @@ struct hostDevShmInfo {
   // consider padding it later
 };
 
+struct CommunicatorArgs {
+  std::string rendezvous_ip;
+  int rendezvous_port;
+  int rank;
+  int nranks;
+  int dev_idx;
+};
+
 // record context informations
 //
 class Communicator {
  public:
-  Communicator(std::string rendezvous_ip,
-               int rendezvous_port,
-               int rank,
-               int nranks,
-               int dev_idx);
+  Communicator(CommunicatorArgs& context);
   Connection& getConnection(int peer);
 };
 
 // change name later
-void ourSend(void* dev_ptr, size_t bytes_count, int peer, Communicator& comm);
+// async
+handle_t ourSend(void* dev_ptr, size_t bytes_count, int peer, Communicator& comm);
 
-void ourRecv(void* dev_ptr, size_t bytes_count, int peer, Communicator& comm);
+handle_t ourRecv(void* dev_ptr, size_t bytes_count, int peer, Communicator& comm);
+
+void waitTask(handle_t& handle, Communicator& comm);

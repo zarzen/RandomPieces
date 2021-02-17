@@ -41,7 +41,8 @@ int main() {
         // cudaLaunchKernel((void*)dataMove, dim3(1), dim3(512), args, 0, NULL);
         int pack128_elems = nelem / (sizeof(Pack128) / sizeof(float));
         void* args[3] = {&gpu_mem, &shm_cpu_gpu, &pack128_elems};
-        cudaError_t ret = cudaLaunchKernel((void*)pack128Move, dim3(1), dim3(256), args, 0, NULL);
+        // cudaError_t ret = cudaLaunchKernel((void*)pack128Move, dim3(1), dim3(256), args, 0, NULL);
+        cudaError_t ret = cudaLaunchKernel((void*)pack128MoveUnroll1, dim3(1), dim3(256), args, 0, NULL);
         if (ret != cudaSuccess) {
             printf("error %s\n", cudaGetErrorString(ret));
         }
@@ -50,7 +51,7 @@ int main() {
         cudaEventSynchronize(stop);
         float cost_ms;
         cudaEventElapsedTime(&cost_ms, start, stop);
-        printf("move %d elements costs %f ms \n", nelem, cost_ms);
+        printf("move %d elements costs %f ms, bw %f Gbps\n", nelem, cost_ms, nelem * sizeof(float) * 8 / cost_ms / 1e6);
         // bool pass_check = true;
         pass_check = true;
         for (int i = 0; i < nelem; ++i) {
