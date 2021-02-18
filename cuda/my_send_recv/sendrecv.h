@@ -7,10 +7,12 @@
 
 #define N_CUDA_THREADS 256
 #define N_HOST_MEM_SLOTS 4
-#define MEM_SLOT_SIZE 1024 * 1024  // in bytes
+#define MEM_SLOT_SIZE 1048576  // in bytes; must be a multiple of 16 (128bits).
 #define CACHE_LINE_SIZE 128
 
 typedef unsigned long handle_t;
+
+typedef enum { Net = 0, P2P = 1, SHM = 2} ConnectionType_t;
 
 // network, shm, p2p through this interface
 class Connection {
@@ -19,10 +21,18 @@ class Connection {
   virtual void sendCtrl(void* buff, size_t count) = 0;
   // only for CPU buffers
   virtual void sendData(void* buff, size_t count) = 0;
+
+  virtual ConnectionType_t getType() = 0;
 };
 
 // TCP network connection
-class NetConnection : public Connection {};
+class NetConnection : public Connection {
+public:
+  void sendCtrl(void* buff, size_t count);
+  void sendData(void* buff, size_t count);
+
+  ConnectionType_t getType();
+};
 
 // exchange msg with host
 struct hostDevShmInfo {
@@ -32,8 +42,8 @@ struct hostDevShmInfo {
   int size_fifo[N_HOST_MEM_SLOTS] = {0};
   // pre allocated memory buffers on Host
   void* ptr_fifo[N_HOST_MEM_SLOTS] = {nullptr};
-  size_t head = 0;
-  size_t tail = N_HOST_MEM_SLOTS;
+  size_t head = N_HOST_MEM_SLOTS;
+  size_t tail = 0;
   // consider padding it later
 };
 
