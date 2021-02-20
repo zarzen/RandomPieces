@@ -29,7 +29,7 @@ void dev2HostBandwidth(void* dev_buff, size_t nbytes, int repeat) {
     void* kernel_args[3] = {&dev_buff, &task_info, &nbytes};
     double start_time = timeMs();
     CUDACHECK(cudaEventRecord(start, stream));
-    CUDACHECK(cudaLaunchKernel((void*)netSendKernel, dim3(1), dim3(256), kernel_args, 0, stream));
+    CUDACHECK(cudaLaunchKernel((void*)netSendKernel, dim3(1), dim3(320), kernel_args, 0, stream));
     CUDACHECK(cudaEventRecord(stop, stream));
     size_t offset = 0;
     while (offset < nbytes) {
