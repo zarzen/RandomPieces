@@ -86,7 +86,7 @@ __global__ void netSendKernel(void* send_buff, struct hostDevShmInfo* info, size
   volatile size_t* head = &(info->head);
   volatile size_t* tail = &(info->tail);
   volatile int* size_fifo = info->size_fifo;
-  int size_idx = info->size_idx;
+  int size_idx = 0;
   char* ptr_fifo[N_HOST_MEM_SLOTS];
 
   // store the ptrs locally, not fetch from global memory
@@ -114,6 +114,7 @@ __global__ void netSendKernel(void* send_buff, struct hostDevShmInfo* info, size
 
   int last_chunk = count_bytes - n_steps * host_slot_size;
   int remain = last_chunk;
+
   if (remain > 0) {
     waitSend(head, tail);
     int n_pack128 = remain / sizeof(Pack128);

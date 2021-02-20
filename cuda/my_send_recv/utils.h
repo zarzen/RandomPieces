@@ -23,6 +23,14 @@ static void hostAlloc(T** ptr, size_t nelem) {
   memset(*ptr, 0, nelem * sizeof(T));
 }
 
+template<typename T>
+static void fillVals(T* buff, size_t count) {
+  for (int i = 0; i < count; ++i) {
+    T e = static_cast<T>(rand()) / static_cast<T>(RAND_MAX);
+    buff[i] = e;
+  }
+}
+
 static inline void hostFree(void* ptr) {
   CUDACHECK(cudaFreeHost(ptr));
 }

@@ -42,7 +42,7 @@ struct hostDevShmInfo {
   int size_fifo[N_HOST_MEM_SLOTS] = {0};
   // pre allocated memory buffers on Host
   void* ptr_fifo[N_HOST_MEM_SLOTS] = {nullptr};
-  size_t head = N_HOST_MEM_SLOTS;
+  size_t head = N_HOST_MEM_SLOTS; // consumer increase head
   size_t tail = 0;
   // consider padding it later
 };
