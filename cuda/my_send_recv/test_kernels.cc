@@ -48,7 +48,7 @@ void dev2HostBandwidth(void* dev_buff, size_t nbytes, int repeat) {
 // measure the bandwidth
 // -> expect to see 90Gbps
 void testSendKernel() {
-  int nelem = 1 * 1024 * 1024; // 4MB
+  int nelem = 1 * 1024 * 1024 + 5000; // 4MB
   size_t nbytes = nelem * sizeof(float);
   // create a sentinel buffer at host
   void* host_buff = malloc(nbytes);
