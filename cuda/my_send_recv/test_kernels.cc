@@ -5,11 +5,18 @@
 
 
 void dev2HostBandwidth(void* dev_buff, size_t nbytes, int repeat) {
+  int warm_up = 5;
   void* pinned_host_mem;
   CUDACHECK(cudaHostAlloc(&pinned_host_mem, N_HOST_MEM_SLOTS * MEM_SLOT_SIZE,
                           cudaHostAllocMapped));
   double acc_time = 0;
-  for (int i = 0; i < repeat; ++i) {
+  double acc_kernel_time = 0;
+  cudaEvent_t start, stop;
+  cudaStream_t stream;
+  CUDACHECK(cudaEventCreate(&start));
+  CUDACHECK(cudaEventCreate(&stop));
+  CUDACHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  for (int i = 0; i < repeat + warm_up; ++i) {
     hostDevShmInfo* task_info;
     hostAlloc<hostDevShmInfo>(&task_info, 1);
     task_info->head = N_HOST_MEM_SLOTS;
@@ -21,7 +28,9 @@ void dev2HostBandwidth(void* dev_buff, size_t nbytes, int repeat) {
     }
     void* kernel_args[3] = {&dev_buff, &task_info, &nbytes};
     double start_time = timeMs();
-    CUDACHECK(cudaLaunchKernel((void*)netSendKernel, dim3(1), dim3(256), kernel_args, 0, NULL));
+    CUDACHECK(cudaEventRecord(start, stream));
+    CUDACHECK(cudaLaunchKernel((void*)netSendKernel, dim3(1), dim3(256), kernel_args, 0, stream));
+    CUDACHECK(cudaEventRecord(stop, stream));
     size_t offset = 0;
     while (offset < nbytes) {
       if (task_info->head < task_info->tail + N_HOST_MEM_SLOTS) {
@@ -34,12 +43,21 @@ void dev2HostBandwidth(void* dev_buff, size_t nbytes, int repeat) {
         task_info->size_idx = (_idx + 1) % N_HOST_MEM_SLOTS;
       }
     }
-    acc_time += (timeMs() - start_time);
+    cudaEventSynchronize(stop);
+
+    if (i >= warm_up) {
+      acc_time += (timeMs() - start_time);
+      float kernel_time;
+      cudaEventElapsedTime(&kernel_time, start, stop);
+      acc_kernel_time += kernel_time;
+    }
     // printf("time %f ms \n", timeMs() - start_time);
   }
   double avg_time = acc_time / repeat;
+  double avg_kernel_time = acc_kernel_time / repeat;
   double bw = nbytes * 8 / avg_time / 1e6; // Gbps
-  printf("avg cost time %f ms, bandwidth %f Gbps\n", avg_time, bw);
+  double kernel_bw = nbytes * 8 / avg_kernel_time / 1e6;
+  printf("avg cost time %f ms, bandwidth %f Gbps, kernel bw %f Gbps\n", avg_time, bw, kernel_bw);
 }
 
 // TODO: test the send kernel that move the data from dev to host
@@ -48,7 +66,7 @@ void dev2HostBandwidth(void* dev_buff, size_t nbytes, int repeat) {
 // measure the bandwidth
 // -> expect to see 90Gbps
 void testSendKernel() {
-  int nelem = 1 * 1024 * 1024 + 5000; // 4MB
+  int nelem = 8 * 1024 * 1024 + 5000; 
   size_t nbytes = nelem * sizeof(float);
   // create a sentinel buffer at host
   void* host_buff = malloc(nbytes);

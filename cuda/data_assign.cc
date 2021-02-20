@@ -15,7 +15,7 @@ void init_gpu_mem(float* cpu_mem, float* gpu_mem, int nelem) {
 }
 
 int main() {
-    int nelem = 1024 * 1024/4;
+    int nelem = 1024 * 1024/2 + 100;
     void* host_mem1 = malloc(sizeof(float) * nelem);
     void* shm_cpu_gpu;
     cudaHostAlloc(&shm_cpu_gpu, nelem * sizeof(float), cudaHostAllocMapped);

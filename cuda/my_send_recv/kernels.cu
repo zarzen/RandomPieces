@@ -55,7 +55,9 @@ inline __device__ void copyChars(char* dst, char* src, size_t count, int tid, in
 }
 
 inline __device__ void waitSend(volatile size_t* head, volatile size_t* tail) {
-  while (*head <= *tail) { // head is controlled by the consumer
+  size_t cached_head = *head;
+  while (cached_head <= *tail) { // head is controlled by the consumer
+    cached_head = *head;
   }
 }
 
