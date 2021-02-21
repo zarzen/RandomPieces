@@ -5,7 +5,7 @@
 #include <cstdlib>
 #include <unordered_map>
 
-#define N_CUDA_THREADS 256
+#define N_CUDA_THREADS 320 // must be multiple of 32 (warp_size)
 #define N_HOST_MEM_SLOTS 4
 #define MEM_SLOT_SIZE 1048576  // in bytes; must be a multiple of 16 (128bits).
 #define CACHE_LINE_SIZE 128
@@ -46,6 +46,8 @@ struct hostDevShmInfo {
   size_t tail = 0;
   // consider padding it later
 };
+
+void initTaskInfo(hostDevShmInfo** info);
 
 struct CommunicatorArgs {
   std::string rendezvous_ip;

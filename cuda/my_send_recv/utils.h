@@ -4,6 +4,7 @@
 #include <cuda_runtime.h>
 #include <chrono>
 #include <iostream>
+#include <cstring>
 
 #define CUDACHECK(cmd)                                              \
   do {                                                              \

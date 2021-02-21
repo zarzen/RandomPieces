@@ -4,8 +4,8 @@ CC = nvcc $(cc_args)
 
 all: tests benchmark
 
-tests: test_kernels.o kernels.o
-	$(CC) -o test_kernels.bin -lcudart test_kernels.o kernels.o 
+tests: test_kernels.o kernels.o sendrecv.o
+	$(CC) -o test_kernels.bin -lcudart test_kernels.o kernels.o sendrecv.o
 
 benchmark: benchmark.o sendrecv.o kernels.o
 	$(CC) -o benchmark.bin -lcudart sendrecv.o kernels.o benchmark.o
