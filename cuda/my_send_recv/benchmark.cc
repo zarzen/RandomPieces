@@ -41,25 +41,28 @@ int initBuffers(int argc,
   return nelem;
 }
 
-CommunicatorArgs getInitContext(int& argc, char* argv[]) {
-  if (argc < 6) {
+CommunicatorArgs getArgs(int& argc, char* argv[]) {
+  if (argc < 7) {
     printf(
         "require at least 6 arguments for benchmark (rendezvous_ip, "
-        "rendezvous_port, rank, nranks, dev_idx) \n");
+        "rendezvous_port, rank, nranks, dev_idx, local_ip) \n");
   }
   CommunicatorArgs c;
-  c.rendezvous_ip = std::string(argv[1]);
+  std::string rendez_ip_str = std::string(argv[1]);
+  ipStrToInts(rendez_ip_str, c.rendezvous_ip);
   c.rendezvous_port = std::stoi(argv[2]);
   c.rank = std::stoi(argv[3]);
   c.nranks = std::stoi(argv[4]);
   c.dev_idx = std::stoi(argv[5]);
+  std::string local_ip = std::string(argv[6]);
+  ipStrToInts(local_ip, c.local_ip);
   return c;
 }
 
 bool dataIntegrityCheck(void* dev_recv_buff, void* ref_buff, void* tmp_buff, int nelem);
 
 int main(int argc, char* argv[]) {
-  CommunicatorArgs context = getInitContext(argc, argv);
+  CommunicatorArgs context = getArgs(argc, argv);
   Communicator comm(context);
   // 
   cudaSetDevice(context.dev_idx);
@@ -93,11 +96,6 @@ int main(int argc, char* argv[]) {
 bool dataIntegrityCheck(void* dev_recv_buff, void* ref_buff, void* tmp_buff, int nelem) {
   int nbytes = nelem * sizeof(float);
   cudaMemcpy(tmp_buff, dev_recv_buff, nbytes, cudaMemcpyDefault);
-  bool ret = true;
-  for (int i = 0; i < nelem; ++i) {
-    if (((float*)ref_buff)[i] != ((float*)tmp_buff)[i]) {
-      ret = false;
-    }
-  }
-  return ret;
+  int match = memcmp(tmp_buff, ref_buff, nbytes);
+  return match == 0;
 }

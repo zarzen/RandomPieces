@@ -19,24 +19,31 @@
 
 // code copy and modified from nccl
 template <typename T>
-static void hostAlloc(T** ptr, size_t nelem) {
+void hostAlloc(T** ptr, size_t nelem) {
   CUDACHECK(cudaHostAlloc(ptr, nelem * sizeof(T), cudaHostAllocMapped));
   memset(*ptr, 0, nelem * sizeof(T));
 }
 
 template<typename T>
-static void fillVals(T* buff, size_t count) {
+void fillVals(T* buff, size_t count) {
   for (int i = 0; i < count; ++i) {
     T e = static_cast<T>(rand()) / static_cast<T>(RAND_MAX);
     buff[i] = e;
   }
 }
 
-static inline void hostFree(void* ptr) {
-  CUDACHECK(cudaFreeHost(ptr));
-}
+void hostFree(void* ptr);
 
-static inline double timeMs() {
-  return std::chrono::high_resolution_clock::now().time_since_epoch().count() /
-         1e6;
-};
+double timeMs();
+
+uint64_t getHash(const char* string, int n);
+
+bool getHostName(char* hostname, int maxlen, const char delim);
+
+uint64_t getHostHash(void);
+
+void ipStrToInts(std::string& ip, int* ret);
+
+bool createListenSocket(int* fd, int port);
+
+void getSocketPort(int* fd, int* port);
