@@ -1,12 +1,23 @@
 #include "utils.h"
-#include "logger.h"
-#include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/ip.h>
 #include <arpa/inet.h>
+#include <netinet/ip.h>
+#include <netinet/tcp.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #include <sstream>
+#include "common_structs.h"
+#include "logger.h"
 
-
+void initTaskInfo(hostDevShmInfo** info){
+  hostAlloc<hostDevShmInfo>(info, 1);
+  (*info)->tail = 0;
+  (*info)->head = N_HOST_MEM_SLOTS;
+  for (int i = 0; i < N_HOST_MEM_SLOTS; ++i) {
+    void* pinned;
+    CUDACHECK(cudaHostAlloc(&pinned, (MEM_SLOT_SIZE), cudaHostAllocMapped));
+    (*info)->ptr_fifo[i] = pinned;
+  }
+}
 
 void hostFree(void* ptr) {
   CUDACHECK(cudaFreeHost(ptr));
@@ -109,4 +120,74 @@ void getSocketPort(int* fd, int* port) {
   LOG_IF_ERROR(getsockname(*fd, (struct sockaddr*)&sin, &len) == -1,
                "Err while getting port number.");
   *port = ntohs(sin.sin_port);
+}
+
+std::string getSocketIP(int& fd) {
+  struct sockaddr_in sin;
+  socklen_t len = sizeof(sin);
+
+  LOG_IF_ERROR(getsockname(fd, (struct sockaddr*)&sin, &len) == -1,
+              "getsockname failed %s", strerror(errno));
+
+  struct in_addr ipAddr = sin.sin_addr;
+  char str[INET_ADDRSTRLEN + 1] = {'\0'};
+  inet_ntop(AF_INET, &ipAddr, str, INET_ADDRSTRLEN);
+  return std::string(str, INET_ADDRSTRLEN);
+}
+
+// TODO: 
+int socketAccept(int& server_fd, bool tcp_no_delay) {
+  int cli_fd;
+  struct sockaddr_in addr;
+  auto addr_len = sizeof(addr);
+  cli_fd = accept(server_fd, (struct sockaddr*)&addr, (socklen_t*)&addr_len);
+  LOG_IF_ERROR(cli_fd < 0, "accept client failed, server fd %d", server_fd);
+
+  if (tcp_no_delay) {
+    int opt = 1;
+    auto ret = setsockopt(cli_fd, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
+    LOG_IF_ERROR(ret < 0, "enabling TCP_NODELAY failed");
+  }
+  return cli_fd;
+}
+
+std::string ipIntsToStr(int* p, int n) {
+  std::stringstream ss;
+  for (int i = 0; i < n; ++i) {
+    ss << p[i];
+    if (i != n-1) ss << ".";
+  }
+  return ss.str();
+}
+
+// TODO: 
+int createSocketClient(int* ip, int port, bool no_delay) {
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  LOG_IF_ERROR(fd == 0, "create socket fd failed");
+
+  if (no_delay) {
+    int opt = 1;
+    auto ret = setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
+    LOG_IF_ERROR(ret < 0, "enabling TCP_NODELAY failed");
+  }
+
+  struct sockaddr_in serv_addr;
+  serv_addr.sin_family = AF_INET;
+  serv_addr.sin_port = htons(port);
+  std::string server_ip = ipIntsToStr(ip, 4);
+  int ret = inet_pton(AF_INET, server_ip.c_str(), &serv_addr.sin_addr);
+  LOG_IF_ERROR(ret <= 0, "converting ip addr failed");
+
+  bool retry = false;
+  int MAX_RETRY = 10000;
+  int retry_count = 0;
+  do {
+    int ret = ::connect(fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
+    if (ret != 0) retry = true;
+    retry_count++;
+    LOG_IF_ERROR((ret != 0 && retry_count % 1000 == 0), "connecting returned %s, retrying", strerror(errno));
+  } while (retry && retry_count < MAX_RETRY);
+
+  LOG_IF_ERROR(retry, "connect to %s:%d failed: %s", server_ip.c_str(), port, strerror(errno));
+  return fd;
 }

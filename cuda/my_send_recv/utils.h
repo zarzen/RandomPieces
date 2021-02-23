@@ -5,6 +5,9 @@
 #include <chrono>
 #include <iostream>
 #include <cstring>
+#include "logger.h"
+#include "common_structs.h"
+#include <sys/socket.h>
 
 #define CUDACHECK(cmd)                                              \
   do {                                                              \
@@ -19,18 +22,20 @@
 
 // code copy and modified from nccl
 template <typename T>
-void hostAlloc(T** ptr, size_t nelem) {
+static inline void hostAlloc(T** ptr, size_t nelem) {
   CUDACHECK(cudaHostAlloc(ptr, nelem * sizeof(T), cudaHostAllocMapped));
   memset(*ptr, 0, nelem * sizeof(T));
 }
 
 template<typename T>
-void fillVals(T* buff, size_t count) {
+static inline void fillVals(T* buff, size_t count) {
   for (int i = 0; i < count; ++i) {
     T e = static_cast<T>(rand()) / static_cast<T>(RAND_MAX);
     buff[i] = e;
   }
 }
+
+void initTaskInfo(hostDevShmInfo** info);
 
 void hostFree(void* ptr);
 
@@ -47,3 +52,33 @@ void ipStrToInts(std::string& ip, int* ret);
 bool createListenSocket(int* fd, int port);
 
 void getSocketPort(int* fd, int* port);
+
+std::string getSocketIP(int& fd);
+
+int socketAccept(int& server_fd, bool tcp_no_delay);
+
+int createSocketClient(int* ip, int port, bool no_delay);
+
+static bool socketProgressOpt(bool is_send, int fd, void* ptr, int size, int* offset, int block) {
+  int bytes = 0;
+  char* data = (char*)ptr;
+  do {
+    if (is_send) bytes = ::send(fd, data+(*offset), size-(*offset), block ? 0 : MSG_DONTWAIT);
+    else bytes = ::recv(fd, data+(*offset), size-(*offset), block ? 0 : MSG_DONTWAIT);
+    
+    if (!is_send && bytes == 0) {
+      LOG_ERROR("Net : Connection closed by remote peer");
+      return false;
+    }
+    if (bytes == -1) {
+      if (errno != EINTR && errno != EWOULDBLOCK && errno != EAGAIN) {
+        LOG_ERROR("Call to recv failed : %s", strerror(errno));
+        return false;
+      } else {
+        bytes = 0;
+      }
+    }
+    (*offset) += bytes;
+  } while (bytes > 0 && (*offset) < size);
+  return true;
+}

@@ -1,25 +1,10 @@
 #include "sendrecv.h"
 #include <cuda.h>
+#include <sys/socket.h>
+#include <sys/types.h>
 #include <chrono>
 #include "logger.h"
 #include "utils.h"
-
-void initTaskInfo(hostDevShmInfo** info){
-  hostAlloc<hostDevShmInfo>(info, 1);
-  (*info)->tail = 0;
-  (*info)->head = N_HOST_MEM_SLOTS;
-  for (int i = 0; i < N_HOST_MEM_SLOTS; ++i) {
-    void* pinned;
-    CUDACHECK(cudaHostAlloc(&pinned, (MEM_SLOT_SIZE), cudaHostAllocMapped));
-    (*info)->ptr_fifo[i] = pinned;
-  }
-}
-
-void Communicator::initBuffers(CommunicatorArgs& args) {
-  cudaSetDevice(args.dev_idx);
-  initTaskInfo(&recv_ctrl_buff);
-  initTaskInfo(&send_ctrl_buff);
-}
 
 /* start local peer listen socket and register the peer info */
 void Communicator::initLocally(CommunicatorArgs& args, int& listen_fd) {
@@ -35,25 +20,37 @@ void Communicator::initLocally(CommunicatorArgs& args, int& listen_fd) {
   memcpy(self_info.ip, args.local_ip, sizeof(int) * 4);
   self_info.host_hash = getHostHash();
 
-  rendez_client->registerPeer(self_info);
+  rendez_client->registerRankInfo(self_info);
 }
 
 void Communicator::initThreads(CommunicatorArgs& args, int& listen_fd) {
   // start the listen thread for peers
-
+  peer_listen_thd = std::thread(persistentThreadListen, this, listen_fd);
   // start send thread
-
+  send_dispatch_thd = std::thread(persistentThreadSend, this, std::ref(send_task_mtx), std::ref(send_tasks));
   // start recv thread
+  recv_dispatch_thd = std::thread(persistentThreadRecv, this, std::ref(recv_task_mtx), std::ref(recv_tasks));
 }
 
 Communicator::Communicator(CommunicatorArgs& args) {
+  shutdown = false;
   if (args.rank == 0) 
     rendez_server = new RendezvousServer(args.rendezvous_port, args.nranks);
 
-  initBuffers(args);
   int listen_fd;
   initLocally(args, listen_fd);
   initThreads(args, listen_fd);
+}
+
+NetConnection* buildNetConnectionSend(RankInfo& self_info, RankInfo& peer_info, int& n_socks, int& n_threads, int& dev_idx) {
+  NetSendConnArgs args;
+  args.n_socks = n_socks;
+  args.n_threads = n_threads;
+  memcpy(args.peer_ip, peer_info.ip, sizeof(int) * 4);
+  args.peer_port = peer_info.port;
+  args.self_rank = self_info.rank;
+  NetConnection* peer_conn = new NetConnection(args, dev_idx);
+  return peer_conn;
 }
 
 Connection* Communicator::buildConnection(int peer, bool is_send) {
@@ -71,16 +68,13 @@ Connection* Communicator::buildConnection(int peer, bool is_send) {
     }
     return found->second;
   } else {
-    peerInfo peer_info = this->rendez_client->getPeerInfo(peer);
+    RankInfo peer_info = this->rendez_client->getPeerInfo(peer);
     // based on peer info to build corresponding connections
     if (self_info.host_hash != peer_info.host_hash) {
       // peer is at remote -> build NetConnection
-      NetSendConnArgs args;
-      args.n_socks = N_SOCKET;
-      args.n_threads = N_SOCKET_THREAD;
-      args.peer_ip = peer_info.ip;
-      args.peer_port = peer_info.port;
-      NetConnection* peer_conn = new NetConnection(args);
+      NetConnection* peer_conn =
+          buildNetConnectionSend(this->self_info, peer_info, N_SOCKET,
+                                 N_SOCKET_THREAD, self_info.dev_idx);
       send_conns[peer] = peer_conn;
       return peer_conn;
     } else {
@@ -137,34 +131,96 @@ handle_t Communicator::enqueueTask(std::queue<CommunicationTask>& task_queue,
     std::lock_guard<mutex> lk(mtx);
     task_queue.emplace(buff, peer, bytes, ret);
   }
+  {
+    std::lock_guard<mutex> lk(ongoing_task_mtx);
+    auto res = ongoing_tasks.insert(ret);
+  LOG_IF_ERROR(res.first == ongoing_tasks.end(), "insert handle for ongoing task failed");
+  }
   return ret;
+}
+
+void Communicator::completeTask(handle_t& h) {
+  std::lock_guard<mutex> lk(ongoing_task_mtx);
+  ongoing_tasks.erase(h);
 }
 
 handle_t Communicator::enqueueSendTask(void* buff, size_t bytes, int peer) {
   return enqueueTask(send_tasks, send_task_mtx, buff, bytes, peer);
-
 }
 
 handle_t Communicator::enqueueRecvTask(void* buff, size_t bytes, int peer) {
   return enqueueTask(recv_tasks, recv_task_mtx, buff, bytes, peer);
 }
 
-bool Communicator::isCompleted(handle_t& handle) {}
+// FIXME: it has problem when query with a handle that is not launched.
+bool Communicator::isCompleted(handle_t& handle) {
+  auto found = ongoing_tasks.find(handle);
+  if (found == ongoing_tasks.end()) {
+    return true;
+  } else {
+    return false;
+  }
+}
 
 Communicator::~Communicator() {
-  // clean resource
+  // TODO: clean resource
 }
 
-static void persistentThreadListen(Communicator* comm, int fd) {
+void Communicator::persistentThreadListen(Communicator* comm, int fd) {
+  // TODO: accept client fd, create correct Connection based on peer_info
+  PeerConnectionInfo conn_info;
 
+  while (!comm->shutdown) {
+    int client_fd = socketAccept(fd, true);
+    auto ret = ::recv(client_fd, &conn_info, sizeof(PeerConnectionInfo), MSG_WAITALL);
+    LOG_IF_ERROR(ret != sizeof(ConnectionType_t), "recv connection protocol failed");
+    if (conn_info.conn_type == Net) {
+      NetRecvConnArgs net_recv_args;
+      net_recv_args.ctrl_fd = client_fd;
+      net_recv_args.n_socks = comm->N_SOCKET;
+      net_recv_args.n_threads = comm->N_SOCKET_THREAD;
+      NetConnection* conn = new NetConnection(net_recv_args, comm->self_info.dev_idx);
+      comm->recv_conns[conn_info.peer_rank] = conn;
+    }
+    else if (conn_info.conn_type == P2P) {
+      LOG_ERROR("Not implemented");
+    }
+    else if (conn_info.conn_type == SHM) {
+      LOG_ERROR("Not implemented");
+    }
+  }
 }
 
-static void persistentThreadSend(Communicator* comm, std::queue<CommunicationTask>& task_queue) {
-
+void Communicator::persistentThreadSend(Communicator* comm, mutex& mtx, std::queue<CommunicationTask>& task_queue) {
+  CommunicationTask task;
+  while (!comm->shutdown) {
+    if (!task_queue.empty()) {
+      {
+        std::lock_guard<mutex> lk(mtx);
+        task = task_queue.front();
+        task_queue.pop();
+      }
+      Connection* conn = comm->getConnection(task.peer, true);
+      conn->send(task.dev_ptr, task.bytes);
+      comm->completeTask(task.handle);
+    }
+  }
 }
 
-static void persistentThreadRecv(Communicator* comm, std::queue<CommunicationTask>& task_queue) {
-
+void Communicator::persistentThreadRecv(Communicator* comm, mutex& mtx, std::queue<CommunicationTask>& task_queue) {
+  CommunicationTask task;
+  while (!comm->shutdown) {
+    if (!task_queue.empty()) {
+      {
+        std::lock_guard<mutex> lk(mtx);
+        task = task_queue.front();
+        task_queue.pop();
+      }
+      Connection* conn = comm->getConnection(task.peer, false);
+      conn->recv(task.dev_ptr, task.bytes);
+      comm->completeTask(task.handle);
+    }
+  }
 }
 
 handle_t ourSend(void* dev_ptr,
