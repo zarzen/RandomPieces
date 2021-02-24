@@ -4,7 +4,7 @@
 #include "sendrecv.h"
 #include "utils.h"
 
-#define N_ELEM 1024 * 1024 / 4
+#define N_ELEM (1024 * 1024)
 #define RAND_SEED 123
 #define REPEAT_EXP 20
 

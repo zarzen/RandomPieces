@@ -206,10 +206,6 @@ __global__ void netRecvKernel(void* recv_buff, struct hostDevShmInfo* info, size
   }
 }
 
-inline __device__ void directStore128(Pack128* dst, const Pack128* src) {
-  asm volatile("st.volatile.global.v2.u64 [%0], {%1,%2};" :: "l"(dst), "l"(src->x), "l"(src->y) : "memory");
-}
-
 __global__ void p2pSendKernel(void* dst_buff, void* src_buff, size_t count) {
   int nthreads = gridDim.x * blockDim.x;
   int tid = blockDim.x * blockIdx.x + threadIdx.x;
