@@ -110,7 +110,7 @@ static inline void buildNetRecvDataConns(int& listen_fd, int& n, std::vector<int
     int fd = socketAccept(listen_fd, true);
     LOG_IF_ERROR(fd < 0, "create net data recv connection failed");
     data_fds.push_back(fd);
-    LOG_DEBUG("Get a data recv sock fd %d (%d/%d)", fd, i, n);
+    LOG_DEBUG("Get a data recv sock fd %d (%d/%d)", fd, i+1, n);
   }
 }
 
@@ -152,6 +152,8 @@ void NetConnection::launchSocketRequest(int idx, void* ptr, int size) {
     SocketTaskQueue* q = task_queue + i; // get the task queue for data_fds[i]
     int task_idx = q->tail % N_HOST_MEM_SLOTS;
     SocketTask* t = &q->tasks[task_idx];
+    LOG_DEBUG("SocketTask* t %p", (void*)t);
+
     LOG_IF_ERROR(t->stage != 0, "using a task slot that is not in stage 0");
     t->fd = data_fds[i];
     t->is_send = this->is_send;
@@ -161,13 +163,15 @@ void NetConnection::launchSocketRequest(int idx, void* ptr, int size) {
     t->stage = 1;
 
     chunk_offset += real_size;
-    i++;
     requests[idx].sub_tasks[i] = t;
+    i++;
   }
   requests[idx].n_sub = i;
   requests[idx].size = size;
   requests[idx].slot_idx = idx;
   requests[idx].stage = 1;
+  LOG_DEBUG("launched socket requst: nsub %d, size %d, slot_idx %d, op %s", i,
+            size, idx, is_send ? "send" : "recv");
 }
 
 bool NetConnection::isRequestDone(int idx) {
@@ -176,6 +180,7 @@ bool NetConnection::isRequestDone(int idx) {
     int n_comp = 0;
     for (int i = 0; i < requests[idx].n_sub; ++i) {
       SocketTask* sub_t = requests[idx].sub_tasks[i];
+      LOG_DEBUG("sub_t %p, idx %d, i %d, n_sub %d", (void*)sub_t, idx, i, requests[idx].n_sub);
       if (sub_t->offset == sub_t->size) n_comp++;
     }
     if (n_comp == requests[idx].n_sub) return true;
@@ -192,11 +197,13 @@ void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
     LOG_ERROR("sending msg size failed");
     return;
   }
-
+  LOG_DEBUG("ctrl_buff size fifo: %d, %d, %d, %d, send byte count %lu", ctrl_buff->size_fifo[0],
+            ctrl_buff->size_fifo[1], ctrl_buff->size_fifo[2],
+            ctrl_buff->size_fifo[3], count);
   // launch kernel
   void* kernel_args[3] = {&buff, &ctrl_buff, &count};
-  CUDACHECK(cudaLaunchKernel((void*)netSendKernel, dim3(1), dim3(n_cuda_threads), kernel_args, 0, stream));
-  CUDACHECK(cudaEventRecord(sync_event, stream));
+  CUDACHECK(cudaLaunchKernel((void*)netSendKernel, dim3(1), dim3(n_cuda_threads), kernel_args, 0, NULL));
+  CUDACHECK(cudaEventRecord(sync_event, NULL));
 
   // init variables
   size_t offset = 0;
@@ -211,6 +218,8 @@ void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
         // TODO: FIXME: pass in slot_idx: for occupy certain request slot;
         int real_size = ctrl_buff->size_fifo[next_req_slot];
         void* data_ptr = ctrl_buff->ptr_fifo[next_req_slot];
+        LOG_DEBUG("i %lu, cur_tail %lu, data_ptr %p, size %d", i, cur_tail, data_ptr, real_size);
+
         launchSocketRequest(next_req_slot, data_ptr, real_size);
         next_req_slot = (next_req_slot + 1) % N_HOST_MEM_SLOTS;
       }

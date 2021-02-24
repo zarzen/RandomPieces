@@ -175,6 +175,7 @@ handle_t Communicator::enqueueSendTask(void* buff, size_t bytes, int peer) {
 }
 
 handle_t Communicator::enqueueRecvTask(void* buff, size_t bytes, int peer) {
+  LOG_DEBUG("enqueue recv task size %lu", bytes);
   return enqueueTask(recv_tasks, recv_task_mtx, buff, bytes, peer);
 }
 
@@ -260,6 +261,8 @@ void Communicator::persistentThreadSend(Communicator* comm, mutex& mtx, std::que
         task_queue.pop();
       }
       Connection* conn = comm->getConnection(task.peer, true);
+      LOG_DEBUG("comm send, ptr %p, size %lu", task.dev_ptr, task.bytes);
+
       conn->send(task.dev_ptr, task.bytes, comm->send_stream);
       comm->completeTask(task.handle);
     }
@@ -286,6 +289,7 @@ handle_t ourSend(void* dev_ptr,
                  size_t bytes_count,
                  int peer,
                  Communicator& comm) {
+  LOG_DEBUG("ourSend %p, size %lu, to peer %d", dev_ptr, bytes_count, peer);
   return comm.enqueueSendTask(dev_ptr, bytes_count, peer);
 }
 

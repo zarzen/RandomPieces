@@ -69,6 +69,7 @@ inline __device__ void postSend(volatile size_t* tail,
   if (tid == 0) {
     size_fifo[size_idx] = n_bytes;
     (*tail)++;
+    printf("kernel post size %d\n", n_bytes);
   }
 
   size_idx = (++size_idx) % N_HOST_MEM_SLOTS;

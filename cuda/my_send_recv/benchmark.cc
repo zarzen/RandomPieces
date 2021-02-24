@@ -24,8 +24,8 @@ int initBuffers(int argc,
                  void** host_buff,
                  void** host_tmp) {
   int nelem = N_ELEM;
-  if (argc >= 7) {
-    nelem = std::stoi(argv[6]);
+  if (argc > 7) {
+    nelem = std::stoi(argv[7]);
   }
   int nbytes = nelem * sizeof(float);
   *host_buff = malloc(nbytes);
@@ -73,6 +73,7 @@ int main(int argc, char* argv[]) {
   void *host_buff, *dev_send_buff, *dev_recv_buff, *host_tmp;
   int nelem = initBuffers(argc, argv, &dev_send_buff, &dev_recv_buff, &host_buff, &host_tmp);
   int nbytes = nelem * sizeof(float);
+  LOG_INFO("benchmarking send recv nbytes %d", nbytes);
 
   int next_peer = (context.rank + 1) % context.nranks;
   int pre_peer = (context.rank + context.nranks - 1) % context.nranks;
