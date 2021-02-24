@@ -102,10 +102,23 @@ class NetConnection : public Connection {
   ~NetConnection();
 };
 
+struct P2PSendArgs {
+  int self_rank;
+  int peer_port; // build tcp connection to same host
+};
+
+struct P2PRecvArgs {
+  int self_rank;
+  int ctrl_fd;
+};
 class P2PConnection : public Connection {
+  int self_rank;
+  int ctrl_fd;
 
 public:
-  P2PConnection();
+  P2PConnection(P2PSendArgs& args);
+  P2PConnection(P2PRecvArgs& args);
+
   void send(void* buff, size_t nbytes, cudaStream_t stream);
   void recv(void* buff, size_t nbytes, cudaStream_t stream);
 

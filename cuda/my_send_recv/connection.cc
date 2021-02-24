@@ -291,3 +291,66 @@ NetConnection::~NetConnection() {
 
   freeDevCtrl(ctrl_buff);
 }
+
+P2PConnection::P2PConnection(P2PSendArgs& args) {
+  int local_ip[4] = {127,0,0,1};
+  ctrl_fd = createSocketClient(local_ip, args.peer_port, true);
+  // send 
+  PeerConnectionInfo conn_info;
+  conn_info.peer_rank = args.self_rank;
+  conn_info.conn_type = P2P;
+  LOG_IF_ERROR(
+      ::send(ctrl_fd, &conn_info, sizeof(conn_info), 0) != sizeof(conn_info),
+      "p2p sending connection info failed");
+
+}
+
+P2PConnection::P2PConnection(P2PRecvArgs& args) {
+  ctrl_fd = args.ctrl_fd;
+  self_rank = args.self_rank;
+}
+
+ConnectionType_t P2PConnection::getType() {
+  return P2P;
+}
+
+void P2PConnection::send(void* buff, size_t nbytes, cudaStream_t stream) {
+  // send the size info for mutual agree
+  LOG_IF_ERROR(::send(ctrl_fd, &nbytes, sizeof(nbytes), 0) != sizeof(nbytes),
+               "p2p sending size confirmation failed");
+
+  // recv the memory handle from receiver
+  cudaIpcMemHandle_t ipc_handle;
+  LOG_IF_ERROR(
+      ::recv(ctrl_fd, &ipc_handle, sizeof(ipc_handle), 0) != sizeof(ipc_handle),
+      "p2p receiving ipc handle failed");
+  
+  void* dst_ipc_ptr;
+  CUDACHECK(cudaIpcOpenMemHandle(&dst_ipc_ptr, ipc_handle, cudaIpcMemLazyEnablePeerAccess));
+  // TODO launch cuda kernel for data movement
+
+  // ack to peer
+  int ack = 1;
+  LOG_IF_ERROR(::send(ctrl_fd, &ack, sizeof(ack), 0) != sizeof(ack),
+               "p2p sending ack failed");
+}
+
+void P2PConnection::recv(void* buff, size_t nbytes, cudaStream_t stream) {
+  size_t src_size;
+  ::recv(ctrl_fd, &src_size, sizeof(size_t), 0);
+  if (src_size != nbytes) {
+    LOG_ERROR("p2p received data size != launched size");
+    return;
+  }
+
+  cudaIpcMemHandle_t ipc_handle;
+  CUDACHECK(cudaIpcGetMemHandle(&ipc_handle, buff));
+  LOG_IF_ERROR(
+      ::send(ctrl_fd, &ipc_handle, sizeof(ipc_handle), 0) != sizeof(ipc_handle),
+      "p2p receiver sending ipc handle failed");
+  
+  // wait for completion
+  int complete;
+  LOG_IF_ERROR(::recv(ctrl_fd, &complete, sizeof(complete), 0) != sizeof(int),
+               "p2p receiver waiting for completion failed");
+}
