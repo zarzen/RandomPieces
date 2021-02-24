@@ -6,9 +6,23 @@
 #include "logger.h"
 #include "utils.h"
 
+static void createStream(cudaStream_t* stream) {
+  int greatest_priority;
+  CUDACHECK(cudaDeviceGetStreamPriorityRange(NULL, &greatest_priority));
+  CUDACHECK(cudaStreamCreateWithPriority(stream, cudaStreamNonBlocking, greatest_priority));
+}
+
 /* start local peer listen socket and register the peer info */
 void Communicator::initLocally(CommunicatorArgs& args, int& listen_fd) {
   rendez_client = new RendezvousClient(args.rendezvous_ip, args.rendezvous_port);
+  send_stream = args.send_stream;
+  recv_stream = args.recv_stream;
+  if (send_stream == NULL) {
+    createStream(&send_stream);
+  }
+  if (recv_stream == NULL) {
+    createStream(&recv_stream);
+  }
 
   int listen_port;
   createListenSocket(&listen_fd, 0);
@@ -40,6 +54,7 @@ Communicator::Communicator(CommunicatorArgs& args) {
   int listen_fd;
   initLocally(args, listen_fd);
   initThreads(args, listen_fd);
+  getSocketPort(&listen_fd, &listen_port);
 }
 
 NetConnection* buildNetConnectionSend(RankInfo& self_info, RankInfo& peer_info, int& n_socks, int& n_threads, int& dev_idx) {
@@ -49,7 +64,7 @@ NetConnection* buildNetConnectionSend(RankInfo& self_info, RankInfo& peer_info, 
   memcpy(args.peer_ip, peer_info.ip, sizeof(int) * 4);
   args.peer_port = peer_info.port;
   args.self_rank = self_info.rank;
-  NetConnection* peer_conn = new NetConnection(args, dev_idx);
+  NetConnection* peer_conn = new NetConnection(args, dev_idx, N_CUDA_THREADS);
   return peer_conn;
 }
 
@@ -162,8 +177,35 @@ bool Communicator::isCompleted(handle_t& handle) {
   }
 }
 
+void Communicator::closeListenThread() {
+  int local_ip[4] = {127,0,0,1};
+  int tmp_fd = createSocketClient(local_ip, listen_port, true);
+  PeerConnectionInfo tmp_info;
+  tmp_info.peer_rank = -1;
+  LOG_IF_ERROR(
+      ::send(tmp_fd, &tmp_info, sizeof(tmp_info), 0) != sizeof(tmp_info),
+      "closing listen thread failed");
+}
+
 Communicator::~Communicator() {
-  // TODO: clean resource
+  shutdown = true;
+  if (peer_listen_thd.joinable()) {
+    // TODO: fix
+    closeListenThread();
+    peer_listen_thd.join();
+  }
+  if (send_dispatch_thd.joinable()) send_dispatch_thd.join();
+  if (recv_dispatch_thd.joinable()) recv_dispatch_thd.join();
+
+  if (args.rank == 0)
+    delete rendez_server;
+  delete rendez_client;
+  for (auto p : recv_conns) {
+    delete p.second;
+  }
+  for (auto p : send_conns) {
+    delete p.second;
+  }
 }
 
 void Communicator::persistentThreadListen(Communicator* comm, int fd) {
@@ -174,12 +216,14 @@ void Communicator::persistentThreadListen(Communicator* comm, int fd) {
     int client_fd = socketAccept(fd, true);
     auto ret = ::recv(client_fd, &conn_info, sizeof(PeerConnectionInfo), MSG_WAITALL);
     LOG_IF_ERROR(ret != sizeof(ConnectionType_t), "recv connection protocol failed");
+    if (conn_info.peer_rank == -1) return; // close signal
+
     if (conn_info.conn_type == Net) {
       NetRecvConnArgs net_recv_args;
       net_recv_args.ctrl_fd = client_fd;
       net_recv_args.n_socks = comm->N_SOCKET;
       net_recv_args.n_threads = comm->N_SOCKET_THREAD;
-      NetConnection* conn = new NetConnection(net_recv_args, comm->self_info.dev_idx);
+      NetConnection* conn = new NetConnection(net_recv_args, comm->self_info.dev_idx, N_CUDA_THREADS);
       comm->recv_conns[conn_info.peer_rank] = conn;
     }
     else if (conn_info.conn_type == P2P) {
@@ -201,7 +245,7 @@ void Communicator::persistentThreadSend(Communicator* comm, mutex& mtx, std::que
         task_queue.pop();
       }
       Connection* conn = comm->getConnection(task.peer, true);
-      conn->send(task.dev_ptr, task.bytes);
+      conn->send(task.dev_ptr, task.bytes, comm->send_stream);
       comm->completeTask(task.handle);
     }
   }
@@ -217,7 +261,7 @@ void Communicator::persistentThreadRecv(Communicator* comm, mutex& mtx, std::que
         task_queue.pop();
       }
       Connection* conn = comm->getConnection(task.peer, false);
-      conn->recv(task.dev_ptr, task.bytes);
+      conn->recv(task.dev_ptr, task.bytes, comm->recv_stream);
       comm->completeTask(task.handle);
     }
   }

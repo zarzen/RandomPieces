@@ -83,7 +83,7 @@ void testSendKernel(size_t& nelem) {
 
   // alloc shared memory
   hostDevShmInfo* task_info;
-  initTaskInfo(&task_info);
+  allocDevCtrl(&task_info);
 
   // launch netSendKernel to move the data from dev to host
   // first round do the data integrity check
@@ -121,7 +121,7 @@ void testRecvKernel(size_t nelem){
 
   // alloc shared memory
   hostDevShmInfo* task_info;
-  initTaskInfo(&task_info);
+  allocDevCtrl(&task_info);
 
   void* kernel_args[3] = {&dev_buff, &task_info, &nbytes};
   double start_time = timeMs();

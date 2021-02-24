@@ -8,7 +8,7 @@
 #include "common_structs.h"
 #include "logger.h"
 
-void initTaskInfo(hostDevShmInfo** info){
+void allocDevCtrl(hostDevShmInfo** info){
   hostAlloc<hostDevShmInfo>(info, 1);
   (*info)->tail = 0;
   (*info)->head = N_HOST_MEM_SLOTS;
@@ -17,6 +17,13 @@ void initTaskInfo(hostDevShmInfo** info){
     CUDACHECK(cudaHostAlloc(&pinned, (MEM_SLOT_SIZE), cudaHostAllocMapped));
     (*info)->ptr_fifo[i] = pinned;
   }
+}
+
+void freeDevCtrl(hostDevShmInfo* info) {
+  for (int i = 0; i < N_HOST_MEM_SLOTS; ++i) {
+    CUDACHECK(cudaFreeHost(info->ptr_fifo[i]));
+  }
+  CUDACHECK(cudaFreeHost(info));
 }
 
 void hostFree(void* ptr) {

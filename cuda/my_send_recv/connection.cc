@@ -1,18 +1,26 @@
 #include "connection.h"
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include "utils.h"
 #include <sys/socket.h>
+#include "kernels.h"
 #include "logger.h"
+#include "utils.h"
+
+#define SOCK_MIN_SIZE (64*1024)
 
 ConnectionType_t NetConnection::getType() {
   return Net;
 }
 
 void NetConnection::initBuffer() {
+  close = false;
   cudaSetDevice(dev_idx);
-  hostAlloc<hostDevShmInfo>(&ctrl_buff, 1);
+  allocDevCtrl(&ctrl_buff);
+  CUDACHECK(cudaEventCreate(&sync_event));
 
+  for (int i = 0; i < N_HOST_MEM_SLOTS; ++i) {
+    requests[i].sub_tasks = new SocketTask*[n_data_socks];
+  }
 }
 
 static inline void sendNetConnectionInfo(int& rank, ConnectionType_t type, int& fd) {
@@ -38,8 +46,40 @@ static inline void buildNetSendDataConns(int* ip, int port, int n, std::vector<i
   }
 }
 
-// TODO: build connection with remote peer, launch n_threads with n_socks as data socks
-NetConnection::NetConnection(NetSendConnArgs& args, int dev_idx): is_send(true), dev_idx(dev_idx) {
+void NetConnection::launchBackgroundThreads() {
+  for (int i = 0; i < n_threads; ++i) {
+    background_threads.emplace_back(persistentSocketThread, this, i,
+                                    task_queue);
+  }
+}
+
+void NetConnection::persistentSocketThread(NetConnection* conn, int tid, SocketTaskQueue* task_queue) {
+  // TODO: 
+  int n_sock_per_thread = conn->n_data_socks / conn->n_threads;
+  SocketTaskQueue* my_queues = task_queue + tid * n_sock_per_thread;
+
+  while (!conn->close) {
+    for (int i = 0; i < n_sock_per_thread; ++i) {
+      SocketTaskQueue* sock_queue = my_queues + i;
+      SocketTask* t = &sock_queue->tasks[sock_queue->head % N_HOST_MEM_SLOTS];
+      if (t->stage == 1 && t->offset < t->size) {
+        // progress on this task
+        bool res = socketProgressOpt(t->is_send, t->fd, t->ptr, t->size, &t->offset, 0);
+        LOG_IF_ERROR(!res, "socket progress failed");
+      }
+      if (t->offset >= t->size) sock_queue->head++; // consumer move
+    }
+  }
+}
+
+NetConnection::NetConnection(NetSendConnArgs& args,
+                             int dev_idx,
+                             int n_cuda_threads)
+    : n_cuda_threads(n_cuda_threads),
+      is_send(true),
+      dev_idx(dev_idx),
+      n_data_socks(args.n_socks),
+      n_threads(args.n_threads) {
   initBuffer();
   ctrl_fd = createListenSocket(args.peer_ip, args.peer_port);
   sendNetConnectionInfo(args.self_rank, Net, ctrl_fd);
@@ -47,7 +87,7 @@ NetConnection::NetConnection(NetSendConnArgs& args, int dev_idx): is_send(true),
   data_fds.reserve(args.n_socks);
   buildNetSendDataConns(args.peer_ip, new_port, args.n_socks, this->data_fds);
 
-  // TODO: launch threads for socket send tasks
+  launchBackgroundThreads();
 }
 
 static inline void sendNewListenPort(int& ctrl_fd, int& new_listen_fd) {
@@ -65,16 +105,189 @@ static inline void buildNetRecvDataConns(int& listen_fd, int& n, std::vector<int
   }
 }
 
-// TODO: start a local listen socket, send the port back, accept n_socks as data recv socks, and launch n_threads
-NetConnection::NetConnection(NetRecvConnArgs& args, int dev_idx): is_send(false), dev_idx(dev_idx) {
+NetConnection::NetConnection(NetRecvConnArgs& args,
+                             int dev_idx,
+                             int n_cuda_threads)
+    : n_cuda_threads(n_cuda_threads),
+      is_send(false),
+      dev_idx(dev_idx),
+      n_data_socks(args.n_socks),
+      n_threads(args.n_threads) {
   initBuffer();
   ctrl_fd = args.ctrl_fd;
   createListenSocket(&listen_fd, 0);
   sendNewListenPort(ctrl_fd, listen_fd);
   buildNetRecvDataConns(listen_fd, args.n_socks, this->data_fds);
 
-  // TODO: launch threads for socket tasks
+  launchBackgroundThreads();
 }
 
-void NetConnection::send(void* buff, size_t count) {}
-void NetConnection::recv(void* buff, size_t count) {}
+void resetCtrlStatus(hostDevShmInfo* ctrl_buff) {
+  ctrl_buff->head = N_HOST_MEM_SLOTS;
+  ctrl_buff->tail = 0;
+  ctrl_buff->size_idx = 0;
+  memset(ctrl_buff->size_fifo, 0, sizeof(ctrl_buff->size_fifo));
+}
+
+void NetConnection::launchSocketRequest(int idx, void* ptr, int size) {
+  if (requests[idx].stage != 0) {
+    LOG_ERROR("launch socket request failed, there is ongoing request at slot %d", idx);
+    return;
+  }
+  int chunk_offset = 0, i = 0;
+  int sub_size = std::max(SOCK_MIN_SIZE, DIVUP(size, n_data_socks));
+  while (chunk_offset < size) {
+    int real_size = std::min(sub_size, size - chunk_offset);
+    SocketTaskQueue* q = task_queue + i; // get the task queue for data_fds[i]
+    int task_idx = q->tail % N_HOST_MEM_SLOTS;
+    SocketTask* t = &q->tasks[task_idx];
+    LOG_IF_ERROR(t->stage != 0, "using a task slot that is not in stage 0");
+    t->fd = data_fds[i];
+    t->is_send = this->is_send;
+    t->offset = 0;
+    t->size = real_size;
+    t->ptr = (char*)ptr + chunk_offset;
+    t->stage = 1;
+
+    chunk_offset += real_size;
+    i++;
+    requests[idx].sub_tasks[i] = t;
+  }
+  requests[idx].n_sub = i;
+  requests[idx].size = size;
+  requests[idx].slot_idx = idx;
+  requests[idx].stage = 1;
+}
+
+bool NetConnection::isRequestDone(int idx) {
+  if(requests[idx].stage == 0) return false;
+  if (requests[idx].stage == 1) {
+    int n_comp = 0;
+    for (int i = 0; i < requests[idx].n_sub; ++i) {
+      SocketTask* sub_t = requests[idx].sub_tasks[i];
+      if (sub_t->offset == sub_t->size) n_comp++;
+    }
+    if (n_comp == requests[idx].n_sub) return true;
+  }
+  return false;
+}
+
+void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
+  // TODO: 
+  // send the data size to peer, then launch netSendKernel
+  // progressively launch socket tasks for parallel sending
+  int bytes = ::send(ctrl_fd, &count, sizeof(count), 0);
+  if (bytes != sizeof(count)) {
+    LOG_ERROR("sending msg size failed");
+    return;
+  }
+
+  // launch kernel
+  void* kernel_args[3] = {&buff, &ctrl_buff, &count};
+  CUDACHECK(cudaLaunchKernel((void*)netSendKernel, dim3(1), dim3(n_cuda_threads), kernel_args, 0, stream));
+  CUDACHECK(cudaEventRecord(sync_event, stream));
+
+  // init variables
+  size_t offset = 0;
+  int slot_idx = 0; // equal to ctrl_buff->size_idx
+  int next_req_slot = 0;
+  size_t last_tail = 0;
+  while (offset < count) {
+    size_t cur_tail = ctrl_buff->tail;
+    if (last_tail < cur_tail) {
+      // item to send; as the producer added one to the queue since last time
+      for (size_t i = last_tail; i < cur_tail; ++i) {
+        // TODO: FIXME: pass in slot_idx: for occupy certain request slot;
+        int real_size = ctrl_buff->size_fifo[next_req_slot];
+        void* data_ptr = ctrl_buff->ptr_fifo[next_req_slot];
+        launchSocketRequest(next_req_slot, data_ptr, real_size);
+        next_req_slot = (next_req_slot + 1) % N_HOST_MEM_SLOTS;
+      }
+      last_tail = cur_tail;
+    }
+
+    // check a status of a request
+    if (isRequestDone(slot_idx)) {
+      offset += requests[slot_idx].size;
+      // reset
+      requests[slot_idx].stage = 0;
+      for (int i = 0; i < requests[slot_idx].n_sub; ++i) {
+        requests[slot_idx].sub_tasks[i]->stage = 0;
+      }
+      ctrl_buff->head++;
+      slot_idx = (slot_idx + 1) % N_HOST_MEM_SLOTS;
+    }
+
+  }
+  CUDACHECK(cudaEventSynchronize(sync_event));
+  resetCtrlStatus(ctrl_buff);
+}
+
+void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
+  // TODO:
+  // recv the size from peer connection and verify
+  size_t recv_signal;
+  size_t bytes = ::recv(ctrl_fd, &recv_signal, sizeof(size_t), 0);
+  LOG_IF_ERROR(bytes != sizeof(size_t), "receeving message size from peer failed");
+  if (recv_signal != count) {
+    LOG_ERROR("received message size %lu does not match launched size %lu", recv_signal, count);
+    return;
+  }
+
+  // launch cuda kernel
+  void* kernel_args[3] = {&buff, &ctrl_buff, &count};
+  CUDACHECK(cudaLaunchKernel((void*)netRecvKernel, dim3(1), dim3(n_cuda_threads), kernel_args, 0, stream));
+  CUDACHECK(cudaEventRecord(sync_event, stream));
+
+  // launch socket requests 
+  // init variables
+  size_t offset = 0; // denotes completed offset
+  size_t socket_offset = 0; // denotes ongoing socket offset
+  int slot_idx = 0; // equal to ctrl_buff->size_idx
+  int next_req_slot = 0;
+  int ongoing_req = 0;
+  size_t last_tail = 0;
+  while (offset < count) {
+    // FIXME: when last several socket requests launched but not completed
+    if (ongoing_req < N_HOST_MEM_SLOTS && socket_offset < count &&
+        ctrl_buff->head > ctrl_buff->tail) {
+      // has memory slots and there are remaining bytes to receive
+      size_t real_size = std::min((size_t)MEM_SLOT_SIZE, count - socket_offset);
+      void* data_ptr = ctrl_buff->ptr_fifo[next_req_slot];
+      launchSocketRequest(next_req_slot, data_ptr, real_size);
+      next_req_slot = (next_req_slot + 1) % N_HOST_MEM_SLOTS;
+      socket_offset += real_size;
+      ongoing_req++;
+    }
+
+    if (isRequestDone(slot_idx)) {
+      offset += requests[slot_idx].size;
+      requests[slot_idx].stage = 0;
+      for (int i = 0; i < requests[slot_idx].n_sub; ++i) {
+        requests[slot_idx].sub_tasks[i]->stage = 0;
+      }
+      // post size of the buffer
+      ctrl_buff->size_fifo[slot_idx] = requests[slot_idx].size;
+      ctrl_buff->tail++;
+      slot_idx = (slot_idx + 1) % N_HOST_MEM_SLOTS;
+      ongoing_req--;
+    }
+
+  }
+  CUDACHECK(cudaEventSynchronize(sync_event));
+  resetCtrlStatus(ctrl_buff);
+}
+
+
+NetConnection::~NetConnection() {
+  close = true;
+  for (auto& t : background_threads) {
+    if (t.joinable()) t.join();
+  }
+
+  for (int i = 0; i < N_HOST_MEM_SLOTS; ++i) {
+    delete[] requests[i].sub_tasks;
+  }
+
+  freeDevCtrl(ctrl_buff);
+}

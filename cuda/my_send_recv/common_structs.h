@@ -1,6 +1,8 @@
 #pragma once
 
 #include <stdint.h>
+#include <cuda.h>
+#include <cuda_runtime.h>
 
 #define N_CUDA_THREADS 320 // must be multiple of 32 (warp_size)
 #define N_HOST_MEM_SLOTS 4
@@ -30,6 +32,8 @@ struct CommunicatorArgs {
   int nranks;
   int dev_idx;
   int local_ip[4]; // ip of current node, consider remove later
+  cudaStream_t send_stream;
+  cudaStream_t recv_stream;
 };
 
 struct CommunicationTask {

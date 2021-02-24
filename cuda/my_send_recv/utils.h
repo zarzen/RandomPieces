@@ -9,6 +9,9 @@
 #include "common_structs.h"
 #include <sys/socket.h>
 
+#define DIVUP(x, y) \
+    (((x)+(y)-1)/(y))
+
 #define CUDACHECK(cmd)                                              \
   do {                                                              \
     cudaError_t e = cmd;                                            \
@@ -35,7 +38,9 @@ static inline void fillVals(T* buff, size_t count) {
   }
 }
 
-void initTaskInfo(hostDevShmInfo** info);
+void allocDevCtrl(hostDevShmInfo** info);
+
+void freeDevCtrl(hostDevShmInfo* info);
 
 void hostFree(void* ptr);
 

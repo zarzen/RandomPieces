@@ -22,8 +22,11 @@ using std::thread;
 class Communicator {
   int N_SOCKET = 16;
   int N_SOCKET_THREAD = 2;
+  cudaStream_t send_stream;
+  cudaStream_t recv_stream;
 
   bool shutdown;
+  CommunicatorArgs args;
 
   struct RankInfo self_info;
   RendezvousServer* rendez_server;
@@ -57,6 +60,8 @@ class Communicator {
                        int& peer);
   void completeTask(handle_t& h);
 
+  void closeListenThread();
+  int listen_port;
   static void persistentThreadListen(Communicator* comm, int fd);
   std::thread peer_listen_thd;
   static void persistentThreadSend(Communicator* comm, mutex& mtx, std::queue<CommunicationTask>& task_queue);
