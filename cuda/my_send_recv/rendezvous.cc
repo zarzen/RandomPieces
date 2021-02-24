@@ -60,8 +60,8 @@ bool RendezvousServer::handleRequest(RendezvousRequest& req, int cli_fd) {
       return true;
     } else {
       // not available now
-      LOG_DEBUG("rendez-server unfulfilled for rank %d, data not available",
-                req.info.rank);
+      // LOG_DEBUG("rendez-server unfulfilled for rank %d, data not available",
+      //           req.info.rank);
       return false;
     }
   }
@@ -89,14 +89,13 @@ void RendezvousServer::persistenServiceThread(RendezvousServer* server) {
 
     std::queue<std::pair<int, RendezvousRequest>> unfulfilled_requests;
     while (!requests.empty()) {
-      LOG_DEBUG("requests size %lu", requests.size());
 
       std::pair<int, RendezvousRequest> req_pair = requests.front();
       requests.pop();
       bool handled = server->handleRequest(req_pair.second, req_pair.first);
       if (!handled) unfulfilled_requests.push(req_pair);
-      LOG_DEBUG("rendez-server there are %lu requests unfulfilled",
-                unfulfilled_requests.size());
+      // LOG_DEBUG("rendez-server there are %lu requests unfulfilled",
+      //           unfulfilled_requests.size());
     }
     requests.swap(unfulfilled_requests);
   }
@@ -145,5 +144,6 @@ RankInfo RendezvousClient::getPeerInfo(int peer) {
 
   bytes = ::recv(fd, &req.info, sizeof(RankInfo), 0);
   LOG_IF_ERROR(bytes != sizeof(RankInfo), "rendezvous-cli pull-recv-info failed");
+  return req.info;
 }
 

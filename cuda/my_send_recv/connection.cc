@@ -27,8 +27,9 @@ static inline void sendNetConnectionInfo(int& rank, ConnectionType_t type, int& 
   PeerConnectionInfo my_info;
   my_info.peer_rank = rank;
   my_info.conn_type = type;
-  auto ret = ::send(fd, &my_info, sizeof(PeerConnectionInfo), 0);
-  LOG_IF_ERROR(ret != sizeof(PeerConnectionInfo), "send connection info to peer failed");
+  int ret = ::send(fd, &my_info, sizeof(PeerConnectionInfo), 0);
+  LOG_IF_ERROR(ret != sizeof(PeerConnectionInfo),
+               "send connection info to peer failed, ret val %d, %s", ret, strerror(errno));
 }
 
 int recvNewListenPort(int& fd) {
@@ -81,7 +82,7 @@ NetConnection::NetConnection(NetSendConnArgs& args,
       n_data_socks(args.n_socks),
       n_threads(args.n_threads) {
   initBuffer();
-  ctrl_fd = createListenSocket(args.peer_ip, args.peer_port);
+  ctrl_fd = createSocketClient(args.peer_ip, args.peer_port, true);
   sendNetConnectionInfo(args.self_rank, Net, ctrl_fd);
   int new_port = recvNewListenPort(ctrl_fd);
   data_fds.reserve(args.n_socks);

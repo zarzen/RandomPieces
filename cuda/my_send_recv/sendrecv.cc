@@ -226,7 +226,8 @@ void Communicator::persistentThreadListen(Communicator* comm, int fd) {
   while (!comm->shutdown) {
     int client_fd = socketAccept(fd, true);
     auto ret = ::recv(client_fd, &conn_info, sizeof(PeerConnectionInfo), MSG_WAITALL);
-    LOG_IF_ERROR(ret != sizeof(ConnectionType_t), "recv connection protocol failed");
+    LOG_IF_ERROR(ret != sizeof(PeerConnectionInfo), "recv connection protocol failed");
+
     if (conn_info.peer_rank == -1) return; // close signal
 
     if (conn_info.conn_type == Net) {
@@ -236,6 +237,8 @@ void Communicator::persistentThreadListen(Communicator* comm, int fd) {
       net_recv_args.n_threads = comm->N_SOCKET_THREAD;
       NetConnection* conn = new NetConnection(net_recv_args, comm->self_info.dev_idx, N_CUDA_THREADS);
       comm->recv_conns[conn_info.peer_rank] = conn;
+      LOG_DEBUG("rank %d build a Net connection with rank %d",
+                comm->self_info.rank, conn_info.peer_rank);
     }
     else if (conn_info.conn_type == P2P) {
       LOG_ERROR("Not implemented");
