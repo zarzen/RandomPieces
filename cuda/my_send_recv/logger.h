@@ -65,7 +65,7 @@ static inline char *timenow();
 #endif
 
 #define LOG_FMT             "%s [%-5s] | %s:%-3d | "
-#define LOG_ARGS(LOG_TAG)   timenow(), LOG_TAG, __FUNCTION__, __LINE__
+#define LOG_ARGS(LOG_TAG)   timenow(), LOG_TAG, _FILE, __LINE__
 
 #define NEWLINE     "\n"
 

@@ -12,6 +12,7 @@ void RendezvousServer::waitAcceptAll() {
       int cli = socketAccept(server_fd, true);
       LOG_IF_ERROR(cli < 0, "accept client socket failed");
       cli_fds.push_back(cli);
+      LOG_DEBUG("rendezvous-server accept one client");
     }
     
     int echo_msg = 1;
@@ -29,7 +30,10 @@ bool RendezvousServer::getRequest(int fd, RendezvousRequest* req_buff) {
   char* ptr = (char*)req_buff;
   bytes = ::recv(fd, ptr, req_size, MSG_DONTWAIT);
   if (bytes > 0) {
-    int add_bytes = ::recv(fd, ptr + bytes, req_size - bytes, MSG_WAITALL);
+    if (bytes < req_size) {
+      LOG_DEBUG("getting remain data of a request of fd %d, remain %d", fd, req_size - bytes);
+      int add_bytes = ::recv(fd, ptr + bytes, req_size - bytes, MSG_WAITALL);
+    }
     return true;
   } else {
     return false;
@@ -39,6 +43,10 @@ bool RendezvousServer::getRequest(int fd, RendezvousRequest* req_buff) {
 bool RendezvousServer::handleRequest(RendezvousRequest& req, int cli_fd) {
   if (req.type == push) {
     rank_infos[req.info.rank] = req.info;
+    LOG_DEBUG(
+        "rendezvous-server registered rank info: rank %d, nranks %d, hosthash "
+        "%lu, port %d",
+        req.info.rank, req.info.nranks, req.info.host_hash, req.info.port);
     return true;
   }
 
@@ -48,9 +56,12 @@ bool RendezvousServer::handleRequest(RendezvousRequest& req, int cli_fd) {
       // found, then send the info back to client
       int bytes = ::send(cli_fd, &(found->second), sizeof(found->second), 0);
       LOG_IF_ERROR(bytes != sizeof(RankInfo), "sending RankInfo back failed");
+      LOG_DEBUG("rendez-server fulfilled pull request for rank %d", req.info.rank);
       return true;
     } else {
       // not available now
+      LOG_DEBUG("rendez-server unfulfilled for rank %d, data not available",
+                req.info.rank);
       return false;
     }
   }
@@ -69,18 +80,27 @@ void RendezvousServer::persistenServiceThread(RendezvousServer* server) {
       int fd = server->cli_fds[i];
       RendezvousRequest req;
       got_req = server->getRequest(fd, &req);
-      if (got_req) requests.push(std::make_pair(fd, req));
+      if (got_req) {
+        requests.push(std::make_pair(fd, req));
+        LOG_DEBUG("rendez-server got request: fd %d, req-type %s, rank %d", fd,
+                  req.type == pull ? "pull" : "push", req.info.rank);
+      }
     }
 
     std::queue<std::pair<int, RendezvousRequest>> unfulfilled_requests;
     while (!requests.empty()) {
+      LOG_DEBUG("requests size %lu", requests.size());
+
       std::pair<int, RendezvousRequest> req_pair = requests.front();
       requests.pop();
       bool handled = server->handleRequest(req_pair.second, req_pair.first);
       if (!handled) unfulfilled_requests.push(req_pair);
+      LOG_DEBUG("rendez-server there are %lu requests unfulfilled",
+                unfulfilled_requests.size());
     }
     requests.swap(unfulfilled_requests);
   }
+  LOG_DEBUG("rendez-server persistent thread exits");
 }
 
 // TODO:
@@ -118,13 +138,12 @@ void RendezvousClient::registerRankInfo(RankInfo& info) {
 RankInfo RendezvousClient::getPeerInfo(int peer) {
   RendezvousRequest req;
   req.type = pull;
-  RankInfo peer_info;
-  peer_info.rank = peer;
+  req.info.rank = peer;
 
   int bytes = ::send(fd, &req, sizeof(req), 0);
   LOG_IF_ERROR(bytes != sizeof(req), "rendezvous-cli pulling-send-req peer info failed");
 
-  bytes = ::recv(fd, &peer_info, sizeof(peer_info), 0);
-  LOG_IF_ERROR(bytes != sizeof(peer_info), "rendezvous-cli pull-recv-info failed");
+  bytes = ::recv(fd, &req.info, sizeof(RankInfo), 0);
+  LOG_IF_ERROR(bytes != sizeof(RankInfo), "rendezvous-cli pull-recv-info failed");
 }
 

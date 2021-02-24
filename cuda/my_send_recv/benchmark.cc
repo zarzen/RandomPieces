@@ -3,6 +3,7 @@
 #include <string>
 #include "sendrecv.h"
 #include "utils.h"
+#include "logger.h"
 
 #define N_ELEM (1024 * 1024)
 #define RAND_SEED 123
@@ -76,7 +77,7 @@ int main(int argc, char* argv[]) {
   double acc_time = 0;
   for (int i = 0; i < REPEAT_EXP; ++i) {
     bool c = dataIntegrityCheck(dev_recv_buff, host_buff, host_tmp, nelem);
-    printf("received buffer equals to send buffer %s (suppose false)\n", c? "true":"false");
+    LOG_INFO("received buffer equals to send buffer %s (suppose false)\n", c? "true":"false");
 
     double start = timeMs();
     handle_t send_handle = ourSend(dev_send_buff, nbytes, next_peer, comm);
@@ -86,11 +87,11 @@ int main(int argc, char* argv[]) {
     acc_time += (timeMs() - start);
 
     c = dataIntegrityCheck(dev_recv_buff, host_buff, host_tmp, nelem);
-    printf("received buffer equals to send buffer %s (suppose true)\n", c? "true":"false");
+    LOG_INFO("received buffer equals to send buffer %s (suppose true)\n", c? "true":"false");
     cudaMemset(dev_recv_buff, 0, nbytes);
   }
   double avg_time = acc_time / REPEAT_EXP;
-  printf("average time cost %f ms, bandwidth %f Gbps\n", avg_time, nbytes * 8 / avg_time / 1e6);
+  LOG_INFO("average time cost %f ms, bandwidth %f Gbps\n", avg_time, nbytes * 8 / avg_time / 1e6);
 }
 
 bool dataIntegrityCheck(void* dev_recv_buff, void* ref_buff, void* tmp_buff, int nelem) {

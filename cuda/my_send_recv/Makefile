@@ -1,5 +1,5 @@
 
-CC_ARGS = -std=c++14
+CC_ARGS = -std=c++14 -DLOG_LEVEL=0x03
 CC = nvcc $(CC_ARGS)
 
 all: tests benchmark

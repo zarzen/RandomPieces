@@ -15,6 +15,8 @@ static void createStream(cudaStream_t* stream) {
 /* start local peer listen socket and register the peer info */
 void Communicator::initLocally(CommunicatorArgs& args, int& listen_fd) {
   rendez_client = new RendezvousClient(args.rendezvous_ip, args.rendezvous_port);
+  LOG_DEBUG("Created rendez-cli");
+
   send_stream = args.send_stream;
   recv_stream = args.recv_stream;
   if (send_stream == NULL) {
@@ -33,8 +35,13 @@ void Communicator::initLocally(CommunicatorArgs& args, int& listen_fd) {
   self_info.dev_idx = args.dev_idx;
   memcpy(self_info.ip, args.local_ip, sizeof(int) * 4);
   self_info.host_hash = getHostHash();
+  LOG_DEBUG(
+      "Filled self info: rank %d, nranks %d, hostHash %lu, port %d, dev_idx %d",
+      self_info.rank, self_info.nranks, self_info.host_hash, self_info.port,
+      self_info.dev_idx);
 
   rendez_client->registerRankInfo(self_info);
+  LOG_DEBUG("Rank %d registered self info to rendez-server", self_info.rank);
 }
 
 void Communicator::initThreads(CommunicatorArgs& args, int& listen_fd) {
@@ -48,8 +55,10 @@ void Communicator::initThreads(CommunicatorArgs& args, int& listen_fd) {
 
 Communicator::Communicator(CommunicatorArgs& args) {
   shutdown = false;
-  if (args.rank == 0) 
+  if (args.rank == 0) {
     rendez_server = new RendezvousServer(args.rendezvous_port, args.nranks);
+    LOG_DEBUG("Launched rendez-server at rank 0");
+  }
 
   int listen_fd;
   initLocally(args, listen_fd);
@@ -84,6 +93,8 @@ Connection* Communicator::buildConnection(int peer, bool is_send) {
     return found->second;
   } else {
     RankInfo peer_info = this->rendez_client->getPeerInfo(peer);
+    LOG_DEBUG("Got peer info: rank %d, listen-port %d, hosthash %lu",
+              peer_info.rank, peer_info.port, peer_info.host_hash);
     // based on peer info to build corresponding connections
     if (self_info.host_hash != peer_info.host_hash) {
       // peer is at remote -> build NetConnection
