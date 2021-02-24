@@ -115,7 +115,7 @@ RendezvousServer::~RendezvousServer() {
   if (background_thd.joinable()) background_thd.join();
 }
 
-// TODO:
+
 RendezvousClient::RendezvousClient(int* server_ip, int server_port) {
   fd = createSocketClient(server_ip, server_port, true);
   // wait for echo back from server
@@ -124,7 +124,6 @@ RendezvousClient::RendezvousClient(int* server_ip, int server_port) {
   LOG_IF_ERROR(bytes != sizeof(echo_msg), "rendezvous recv echo from server failed");
 }
 
-// TODO:
 void RendezvousClient::registerRankInfo(RankInfo& info) {
   RendezvousRequest req;
   req.type = push;

@@ -18,6 +18,7 @@ void NetConnection::initBuffer() {
   allocDevCtrl(&ctrl_buff);
   CUDACHECK(cudaEventCreate(&sync_event));
 
+  task_queue = new SocketTaskQueue[n_data_socks];
   for (int i = 0; i < N_HOST_MEM_SLOTS; ++i) {
     requests[i].sub_tasks = new SocketTask*[n_data_socks];
   }
@@ -62,7 +63,10 @@ void NetConnection::persistentSocketThread(NetConnection* conn, int tid, SocketT
   while (!conn->close) {
     for (int i = 0; i < n_sock_per_thread; ++i) {
       SocketTaskQueue* sock_queue = my_queues + i;
+      LOG_IF_ERROR(sock_queue == NULL, "SocketTaskQueue is nullptr");
       SocketTask* t = &sock_queue->tasks[sock_queue->head % N_HOST_MEM_SLOTS];
+      LOG_IF_ERROR(t == NULL, "SocketTask t is nullptr");
+
       if (t->stage == 1 && t->offset < t->size) {
         // progress on this task
         bool res = socketProgressOpt(t->is_send, t->fd, t->ptr, t->size, &t->offset, 0);
@@ -96,6 +100,7 @@ static inline void sendNewListenPort(int& ctrl_fd, int& new_listen_fd) {
   getSocketPort(&new_listen_fd, &new_listen_port);
   auto ret = ::send(ctrl_fd, &new_listen_port, sizeof(int), 0);
   LOG_IF_ERROR(ret != sizeof(int), "send new listen port failed");
+  LOG_DEBUG("Sent new listen port %d", new_listen_port);
 }
 
 static inline void buildNetRecvDataConns(int& listen_fd, int& n, std::vector<int>& data_fds) {
@@ -103,6 +108,7 @@ static inline void buildNetRecvDataConns(int& listen_fd, int& n, std::vector<int
     int fd = socketAccept(listen_fd, true);
     LOG_IF_ERROR(fd < 0, "create net data recv connection failed");
     data_fds.push_back(fd);
+    LOG_DEBUG("Get a data recv sock fd %d (%d/%d)", fd, i, n);
   }
 }
 
@@ -115,8 +121,10 @@ NetConnection::NetConnection(NetRecvConnArgs& args,
       n_data_socks(args.n_socks),
       n_threads(args.n_threads) {
   initBuffer();
+  LOG_DEBUG("Net connection (recv) build buffer initialized");
   ctrl_fd = args.ctrl_fd;
   createListenSocket(&listen_fd, 0);
+  LOG_DEBUG("Created new listen port for socket data connections");
   sendNewListenPort(ctrl_fd, listen_fd);
   buildNetRecvDataConns(listen_fd, args.n_socks, this->data_fds);
 
@@ -291,6 +299,7 @@ NetConnection::~NetConnection() {
   }
 
   freeDevCtrl(ctrl_buff);
+  delete[] task_queue;
 }
 
 P2PConnection::P2PConnection(P2PSendArgs& args) {

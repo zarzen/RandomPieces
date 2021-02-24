@@ -231,13 +231,14 @@ void Communicator::persistentThreadListen(Communicator* comm, int fd) {
     if (conn_info.peer_rank == -1) return; // close signal
 
     if (conn_info.conn_type == Net) {
+      LOG_DEBUG("Rank %d building connection type Net", comm->self_info.rank);
       NetRecvConnArgs net_recv_args;
       net_recv_args.ctrl_fd = client_fd;
       net_recv_args.n_socks = comm->N_SOCKET;
       net_recv_args.n_threads = comm->N_SOCKET_THREAD;
       NetConnection* conn = new NetConnection(net_recv_args, comm->self_info.dev_idx, N_CUDA_THREADS);
       comm->recv_conns[conn_info.peer_rank] = conn;
-      LOG_DEBUG("rank %d build a Net connection with rank %d",
+      LOG_DEBUG("Rank %d built a receive Net connection with rank %d",
                 comm->self_info.rank, conn_info.peer_rank);
     }
     else if (conn_info.conn_type == P2P) {

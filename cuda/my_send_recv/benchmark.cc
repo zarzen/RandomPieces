@@ -57,6 +57,8 @@ CommunicatorArgs getArgs(int& argc, char* argv[]) {
   c.dev_idx = std::stoi(argv[5]);
   std::string local_ip = std::string(argv[6]);
   ipStrToInts(local_ip, c.local_ip);
+  c.send_stream = NULL;
+  c.recv_stream = NULL;
   return c;
 }
 

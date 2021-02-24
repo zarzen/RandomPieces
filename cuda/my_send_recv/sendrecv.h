@@ -32,7 +32,7 @@ class Communicator {
   RendezvousServer* rendez_server;
   RendezvousClient* rendez_client;
 
-  handle_t handle_num;
+  handle_t handle_num{0};
   mutex handle_mtx;
   handle_t getHandle();
 
