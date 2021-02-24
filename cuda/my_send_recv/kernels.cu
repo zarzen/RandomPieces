@@ -205,3 +205,28 @@ __global__ void netRecvKernel(void* recv_buff, struct hostDevShmInfo* info, size
     postRecv(tid, head, size_idx);
   }
 }
+
+inline __device__ void directStore128(Pack128* dst, const Pack128* src) {
+  asm volatile("st.volatile.global.v2.u64 [%0], {%1,%2};" :: "l"(dst), "l"(src->x), "l"(src->y) : "memory");
+}
+
+__global__ void p2pSendKernel(void* dst_buff, void* src_buff, size_t count) {
+  int nthreads = gridDim.x * blockDim.x;
+  int tid = blockDim.x * blockIdx.x + threadIdx.x;
+  int w = tid / WARP_SIZE;       // Warp number
+  int nw = nthreads / WARP_SIZE; // Number of warps
+  int t = tid % WARP_SIZE;       // Thread (inside the warp)
+
+  Pack128* pack128_dst = (Pack128*)dst_buff;
+  Pack128* pack128_src = (Pack128*)src_buff;
+
+  size_t pack128_count = count / sizeof(Pack128);
+  copy128(pack128_dst, pack128_src, pack128_count, tid, nw, w, t);
+
+  size_t pack128_offset = pack128_count * sizeof(Pack128);
+  size_t remain = count - pack128_offset;
+  if (remain > 0) {
+    copyChars((char*)dst_buff + pack128_offset,
+              (char*)src_buff + pack128_offset, remain, tid, nw, w, t);
+  }
+}

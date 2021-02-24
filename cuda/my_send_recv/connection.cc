@@ -314,6 +314,11 @@ ConnectionType_t P2PConnection::getType() {
   return P2P;
 }
 
+void P2PConnection::commonInit() {
+  n_cuda_threads = N_CUDA_THREADS;
+  CUDACHECK(cudaEventCreate(&sync_event));
+}
+
 void P2PConnection::send(void* buff, size_t nbytes, cudaStream_t stream) {
   // send the size info for mutual agree
   LOG_IF_ERROR(::send(ctrl_fd, &nbytes, sizeof(nbytes), 0) != sizeof(nbytes),
@@ -327,8 +332,14 @@ void P2PConnection::send(void* buff, size_t nbytes, cudaStream_t stream) {
   
   void* dst_ipc_ptr;
   CUDACHECK(cudaIpcOpenMemHandle(&dst_ipc_ptr, ipc_handle, cudaIpcMemLazyEnablePeerAccess));
-  // TODO launch cuda kernel for data movement
 
+  // launch cuda kernel for data movement
+  void* kernel_args[3] = {&dst_ipc_ptr, &buff, &nbytes};
+  CUDACHECK(cudaLaunchKernel((void*)p2pSendKernel, dim3(1), dim3(n_cuda_threads), kernel_args, 0, stream));
+  CUDACHECK(cudaEventRecord(sync_event, stream));
+
+  // wait for completion
+  CUDACHECK(cudaEventSynchronize(sync_event));
   // ack to peer
   int ack = 1;
   LOG_IF_ERROR(::send(ctrl_fd, &ack, sizeof(ack), 0) != sizeof(ack),

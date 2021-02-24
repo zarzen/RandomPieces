@@ -114,7 +114,10 @@ struct P2PRecvArgs {
 class P2PConnection : public Connection {
   int self_rank;
   int ctrl_fd;
-
+  
+  int n_cuda_threads;
+  cudaEvent_t sync_event;
+  void commonInit();
 public:
   P2PConnection(P2PSendArgs& args);
   P2PConnection(P2PRecvArgs& args);
