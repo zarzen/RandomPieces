@@ -5,6 +5,7 @@
 #include "common_structs.h"
 #include <cuda_runtime.h>
 #include <cuda.h>
+#include <cstring>
 
 typedef enum { Net = 0, P2P = 1, SHM = 2} ConnectionType_t;
 
@@ -54,7 +55,9 @@ struct SocketTaskQueue {
   size_t head;
   size_t tail;
   SocketTask tasks[N_HOST_MEM_SLOTS];
-  SocketTaskQueue():head(N_HOST_MEM_SLOTS), tail(0) {}
+  SocketTaskQueue():head(N_HOST_MEM_SLOTS), tail(0) {
+    memset(tasks, 0, sizeof(SocketTask) * N_HOST_MEM_SLOTS);
+  }
 };
 
 struct SocketRequest {

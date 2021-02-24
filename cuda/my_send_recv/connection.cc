@@ -19,8 +19,10 @@ void NetConnection::initBuffer() {
   CUDACHECK(cudaEventCreate(&sync_event));
 
   task_queue = new SocketTaskQueue[n_data_socks];
+
   for (int i = 0; i < N_HOST_MEM_SLOTS; ++i) {
     requests[i].sub_tasks = new SocketTask*[n_data_socks];
+    memset(requests[i].sub_tasks, 0, sizeof(SocketTask*) * n_data_socks);
   }
 }
 
