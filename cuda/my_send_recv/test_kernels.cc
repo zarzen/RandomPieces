@@ -157,7 +157,8 @@ void testRecvKernel(size_t nelem){
 }
 
 int main() {
-  size_t nelem = 8 * 1024 * 1024 + 5000; 
+  // size_t nelem = 8 * 1024 * 1024 + 5000; 
+  size_t nelem = 100;
   printf("test kernels\n");
   testSendKernel(nelem);
   testRecvKernel(nelem);
