@@ -5,6 +5,7 @@
 #include "kernels.h"
 #include "logger.h"
 #include "utils.h"
+#include <assert.h>
 
 #define SOCK_MIN_SIZE (64*1024)
 
@@ -152,7 +153,6 @@ void NetConnection::launchSocketRequest(int idx, void* ptr, int size) {
     SocketTaskQueue* q = task_queue + i; // get the task queue for data_fds[i]
     int task_idx = q->tail % N_HOST_MEM_SLOTS;
     SocketTask* t = &q->tasks[task_idx];
-    LOG_DEBUG("SocketTask* t %p", (void*)t);
 
     LOG_IF_ERROR(t->stage != 0, "using a task slot that is not in stage 0");
     t->fd = data_fds[i];
@@ -165,6 +165,7 @@ void NetConnection::launchSocketRequest(int idx, void* ptr, int size) {
     chunk_offset += real_size;
     requests[idx].sub_tasks[i] = t;
     i++;
+    q->tail++;
   }
   requests[idx].n_sub = i;
   requests[idx].size = size;
@@ -180,7 +181,7 @@ bool NetConnection::isRequestDone(int idx) {
     int n_comp = 0;
     for (int i = 0; i < requests[idx].n_sub; ++i) {
       SocketTask* sub_t = requests[idx].sub_tasks[i];
-      LOG_DEBUG("sub_t %p, idx %d, i %d, n_sub %d", (void*)sub_t, idx, i, requests[idx].n_sub);
+      // LOG_DEBUG("sub_t %p, idx %d, i %d, n_sub %d", (void*)sub_t, idx, i, requests[idx].n_sub);
       if (sub_t->offset == sub_t->size) n_comp++;
     }
     if (n_comp == requests[idx].n_sub) return true;
@@ -192,14 +193,14 @@ void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
   // TODO: 
   // send the data size to peer, then launch netSendKernel
   // progressively launch socket tasks for parallel sending
+  assert(is_send == true);
+
   int bytes = ::send(ctrl_fd, &count, sizeof(count), 0);
   if (bytes != sizeof(count)) {
     LOG_ERROR("sending msg size failed");
     return;
   }
-  LOG_DEBUG("ctrl_buff size fifo: %d, %d, %d, %d, send byte count %lu", ctrl_buff->size_fifo[0],
-            ctrl_buff->size_fifo[1], ctrl_buff->size_fifo[2],
-            ctrl_buff->size_fifo[3], count);
+
   // launch kernel
   void* kernel_args[3] = {&buff, &ctrl_buff, &count};
   CUDACHECK(cudaLaunchKernel((void*)netSendKernel, dim3(1), dim3(n_cuda_threads), kernel_args, 0, NULL));
@@ -228,6 +229,9 @@ void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
 
     // check a status of a request
     if (isRequestDone(slot_idx)) {
+      LOG_DEBUG("completed [%s] request, of size %lu",
+                is_send ? "send" : "recv", requests[slot_idx].size);
+
       offset += requests[slot_idx].size;
       // reset
       requests[slot_idx].stage = 0;
@@ -246,18 +250,22 @@ void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
 void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
   // TODO:
   // recv the size from peer connection and verify
+  assert(is_send == false);
+  LOG_DEBUG("enter net recv");
   size_t recv_signal;
-  size_t bytes = ::recv(ctrl_fd, &recv_signal, sizeof(size_t), 0);
+  size_t bytes = ::recv(ctrl_fd, &recv_signal, sizeof(count), 0);
   LOG_IF_ERROR(bytes != sizeof(size_t), "receeving message size from peer failed");
   if (recv_signal != count) {
     LOG_ERROR("received message size %lu does not match launched size %lu", recv_signal, count);
     return;
   }
+  LOG_DEBUG("net connection recv, receiving %lu", recv_signal);
 
   // launch cuda kernel
   void* kernel_args[3] = {&buff, &ctrl_buff, &count};
   CUDACHECK(cudaLaunchKernel((void*)netRecvKernel, dim3(1), dim3(n_cuda_threads), kernel_args, 0, stream));
   CUDACHECK(cudaEventRecord(sync_event, stream));
+  LOG_DEBUG("Launched netRecvKernel, ptr %p, size %lu", buff, count);
 
   // launch socket requests 
   // init variables
@@ -281,6 +289,9 @@ void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
     }
 
     if (isRequestDone(slot_idx)) {
+      LOG_DEBUG("completed [%s] request, of size %lu",
+                is_send ? "send" : "recv", requests[slot_idx].size);
+
       offset += requests[slot_idx].size;
       requests[slot_idx].stage = 0;
       for (int i = 0; i < requests[slot_idx].n_sub; ++i) {

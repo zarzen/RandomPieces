@@ -12,7 +12,7 @@ void RendezvousServer::waitAcceptAll() {
       int cli = socketAccept(server_fd, true);
       LOG_IF_ERROR(cli < 0, "accept client socket failed");
       cli_fds.push_back(cli);
-      LOG_DEBUG("rendezvous-server accept one client");
+      // LOG_DEBUG("rendezvous-server accept one client");
     }
     
     int echo_msg = 1;
@@ -31,7 +31,7 @@ bool RendezvousServer::getRequest(int fd, RendezvousRequest* req_buff) {
   bytes = ::recv(fd, ptr, req_size, MSG_DONTWAIT);
   if (bytes > 0) {
     if (bytes < req_size) {
-      LOG_DEBUG("getting remain data of a request of fd %d, remain %d", fd, req_size - bytes);
+      // LOG_DEBUG("getting remain data of a request of fd %d, remain %d", fd, req_size - bytes);
       int add_bytes = ::recv(fd, ptr + bytes, req_size - bytes, MSG_WAITALL);
     }
     return true;
@@ -43,10 +43,10 @@ bool RendezvousServer::getRequest(int fd, RendezvousRequest* req_buff) {
 bool RendezvousServer::handleRequest(RendezvousRequest& req, int cli_fd) {
   if (req.type == push) {
     rank_infos[req.info.rank] = req.info;
-    LOG_DEBUG(
-        "rendezvous-server registered rank info: rank %d, nranks %d, hosthash "
-        "%lu, port %d",
-        req.info.rank, req.info.nranks, req.info.host_hash, req.info.port);
+    // LOG_DEBUG(
+    //     "rendezvous-server registered rank info: rank %d, nranks %d, hosthash "
+    //     "%lu, port %d",
+    //     req.info.rank, req.info.nranks, req.info.host_hash, req.info.port);
     return true;
   }
 
@@ -82,8 +82,8 @@ void RendezvousServer::persistenServiceThread(RendezvousServer* server) {
       got_req = server->getRequest(fd, &req);
       if (got_req) {
         requests.push(std::make_pair(fd, req));
-        LOG_DEBUG("rendez-server got request: fd %d, req-type %s, rank %d", fd,
-                  req.type == pull ? "pull" : "push", req.info.rank);
+        // LOG_DEBUG("rendez-server got request: fd %d, req-type %s, rank %d", fd,
+        //           req.type == pull ? "pull" : "push", req.info.rank);
       }
     }
 

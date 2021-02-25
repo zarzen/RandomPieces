@@ -89,7 +89,10 @@ Connection* Communicator::buildConnection(int peer, bool is_send) {
     auto found = conns->find(peer);
     while (found == conns->end()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      found = conns->find(peer);
     }
+    LOG_DEBUG("Found the receive connection type %d to peer %d",
+              found->second->getType(), peer);
     return found->second;
   } else {
     RankInfo peer_info = this->rendez_client->getPeerInfo(peer);
@@ -160,7 +163,7 @@ handle_t Communicator::enqueueTask(std::queue<CommunicationTask>& task_queue,
   {
     std::lock_guard<mutex> lk(ongoing_task_mtx);
     auto res = ongoing_tasks.insert(ret);
-  LOG_IF_ERROR(res.first == ongoing_tasks.end(), "insert handle for ongoing task failed");
+    LOG_IF_ERROR(res.first == ongoing_tasks.end(), "insert handle for ongoing task failed");
   }
   return ret;
 }
@@ -175,7 +178,7 @@ handle_t Communicator::enqueueSendTask(void* buff, size_t bytes, int peer) {
 }
 
 handle_t Communicator::enqueueRecvTask(void* buff, size_t bytes, int peer) {
-  LOG_DEBUG("enqueue recv task size %lu", bytes);
+  // LOG_DEBUG("enqueue recv task, ptr %p, size %lu, peer %d", buff, bytes, peer);
   return enqueueTask(recv_tasks, recv_task_mtx, buff, bytes, peer);
 }
 
@@ -279,6 +282,7 @@ void Communicator::persistentThreadRecv(Communicator* comm, mutex& mtx, std::que
         task_queue.pop();
       }
       Connection* conn = comm->getConnection(task.peer, false);
+      LOG_DEBUG("Got the recv connection towards peer %d", task.peer);
       conn->recv(task.dev_ptr, task.bytes, comm->recv_stream);
       comm->completeTask(task.handle);
     }
@@ -289,7 +293,7 @@ handle_t ourSend(void* dev_ptr,
                  size_t bytes_count,
                  int peer,
                  Communicator& comm) {
-  LOG_DEBUG("ourSend %p, size %lu, to peer %d", dev_ptr, bytes_count, peer);
+  // LOG_DEBUG("ourSend %p, size %lu, to peer %d", dev_ptr, bytes_count, peer);
   return comm.enqueueSendTask(dev_ptr, bytes_count, peer);
 }
 
