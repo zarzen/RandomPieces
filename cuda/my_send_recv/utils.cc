@@ -198,3 +198,12 @@ int createSocketClient(int* ip, int port, bool no_delay) {
   LOG_IF_ERROR(retry, "connect to %s:%d failed: %s", server_ip.c_str(), port, strerror(errno));
   return fd;
 }
+
+void printFloats(const char* prefix, float* buffer, int n) {
+  std::stringstream ss;
+  for (int i = 0; i < n ; ++i) {
+    ss << *(buffer+i);
+    if (i != n -1 ) ss << ",";
+  }
+  LOG_INFO("%s:%s", prefix, ss.str().c_str());
+}

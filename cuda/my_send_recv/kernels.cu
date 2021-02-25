@@ -31,7 +31,11 @@ __device__ __forceinline__ void copy128(Pack128* dst,
   dst += offset;
   src += offset;
   while(offset < count) {
-    directStore128(dst, src);
+    Pack128 v;
+    Fetch128(v, src);
+    // use directStore cause incorrectness: netRecvKernel fetches wrong data from pinned memory
+    // directStore128(dst, src); 
+    Store128(dst, v);
 
     src += inc;
     dst += inc;
@@ -69,6 +73,7 @@ inline __device__ void postSend(volatile size_t* tail,
   if (tid == 0) {
     size_fifo[size_idx] = n_bytes;
     (*tail)++;
+    __threadfence_system();
     // printf("kernel post size %d\n", n_bytes);
   }
 

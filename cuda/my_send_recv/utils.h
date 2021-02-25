@@ -87,3 +87,5 @@ static bool socketProgressOpt(bool is_send, int fd, void* ptr, int size, int* of
   } while (bytes > 0 && (*offset) < size);
   return true;
 }
+
+void printFloats(const char* prefix, float* buffer, int n);
