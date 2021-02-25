@@ -7,7 +7,7 @@
 
 #define N_ELEM (1024 * 1024)
 #define RAND_SEED 123
-#define REPEAT_EXP 1
+#define REPEAT_EXP 10
 
 void fillRandFloats(float* buffer, int nelem) {
   srand(RAND_SEED);

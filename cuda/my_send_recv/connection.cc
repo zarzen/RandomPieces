@@ -67,15 +67,25 @@ void NetConnection::persistentSocketThread(NetConnection* conn, int tid, SocketT
     for (int i = 0; i < n_sock_per_thread; ++i) {
       SocketTaskQueue* sock_queue = my_queues + i;
       LOG_IF_ERROR(sock_queue == NULL, "SocketTaskQueue is nullptr");
-      SocketTask* t = &sock_queue->tasks[sock_queue->head % N_HOST_MEM_SLOTS];
+
+      int task_idx = sock_queue->head % N_HOST_MEM_SLOTS;
+      SocketTask* t = &sock_queue->tasks[task_idx];
       LOG_IF_ERROR(t == NULL, "SocketTask t is nullptr");
 
       if (t->stage == 1 && t->offset < t->size) {
+        LOG_DEBUG("working on [%s] fd %d, task %d, stage %d, offset %d, ptr %p, size %d", 
+            conn->is_send ? "send": "recv", t->fd,
+            task_idx, t->stage, t->offset, t->ptr, t->size);
         // progress on this task
         bool res = socketProgressOpt(t->is_send, t->fd, t->ptr, t->size, &t->offset, 0);
         LOG_IF_ERROR(!res, "socket progress failed");
+        
+        if (t->offset == t->size) {
+          sock_queue->head++;  // consumer move, move to next task.
+          LOG_DEBUG("socket queue head move to %lu", sock_queue->head);
+        }
       }
-      if (t->offset >= t->size) sock_queue->head++; // consumer move
+      
     }
   }
 }
@@ -111,7 +121,7 @@ static inline void buildNetRecvDataConns(int& listen_fd, int& n, std::vector<int
     int fd = socketAccept(listen_fd, true);
     LOG_IF_ERROR(fd < 0, "create net data recv connection failed");
     data_fds.push_back(fd);
-    LOG_DEBUG("Get a data recv sock fd %d (%d/%d)", fd, i+1, n);
+    // LOG_DEBUG("Get a data recv sock fd %d (%d/%d)", fd, i+1, n);
   }
 }
 
@@ -251,7 +261,7 @@ void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
   // TODO:
   // recv the size from peer connection and verify
   assert(is_send == false);
-  LOG_DEBUG("enter net recv");
+
   size_t recv_signal;
   size_t bytes = ::recv(ctrl_fd, &recv_signal, sizeof(count), 0);
   LOG_IF_ERROR(bytes != sizeof(size_t), "receeving message size from peer failed");
@@ -276,7 +286,6 @@ void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
   int ongoing_req = 0;
   size_t last_tail = 0;
   while (offset < count) {
-    // FIXME: when last several socket requests launched but not completed
     if (ongoing_req < N_HOST_MEM_SLOTS && socket_offset < count &&
         ctrl_buff->head > ctrl_buff->tail) {
       // has memory slots and there are remaining bytes to receive
