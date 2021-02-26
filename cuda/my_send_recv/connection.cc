@@ -228,42 +228,20 @@ void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
   double send_sum = 0;
   // DEBUG
   while (offset < count) {
-    size_t cur_tail = ctrl_buff->tail;
-    if (last_tail < cur_tail) {
-      // item to send; as the producer added one to the queue since last time
-      for (size_t i = last_tail; i < cur_tail; ++i) {
-        // TODO: FIXME: pass in slot_idx: for occupy certain request slot;
-        int real_size = ctrl_buff->size_fifo[next_req_slot];
-        void* data_ptr = ctrl_buff->ptr_fifo[next_req_slot];
-        LOG_DEBUG("i %lu, cur_tail %lu, data_ptr %p, size %d", i, cur_tail, data_ptr, real_size);
+    if (ctrl_buff->head < ctrl_buff->tail + N_HOST_MEM_SLOTS) {
+      int real_size = ctrl_buff->size_fifo[slot_idx];
+      // FIXME: for now only use first data socket with sync socket operation
+      int send_bytes = ::send(data_fds[0], ctrl_buff->ptr_fifo[slot_idx], real_size, 0);
+      LOG_IF_ERROR(send_bytes != real_size, "send data via sock fd %d failed", data_fds[0]);
 
-        launchSocketRequest(next_req_slot, data_ptr, real_size);
-        next_req_slot = (next_req_slot + 1) % N_HOST_MEM_SLOTS;
-      }
-      last_tail = cur_tail;
-    }
-
-    // check a status of a request
-    if (isRequestDone(slot_idx)) {
-      LOG_DEBUG("completed [%s] request, of size %lu",
-                is_send ? "send" : "recv", requests[slot_idx].size);
-
-      offset += requests[slot_idx].size;
-      // reset
-      requests[slot_idx].stage = 0;
-      for (int i = 0; i < requests[slot_idx].n_sub; ++i) {
-        requests[slot_idx].sub_tasks[i]->stage = 0;
-      }
-      // DEBUG
-      send_sum +=
-          floatSummary((float*)ctrl_buff->ptr_fifo[requests[slot_idx].slot_idx],
-                       requests[slot_idx].size / sizeof(float));
-      // DEBUG
-
+      // DEBUG sum
+      send_sum += floatSummary((float*)ctrl_buff->ptr_fifo[slot_idx], real_size/sizeof(float));
+      
+      ctrl_buff->size_fifo[slot_idx] = 0;
       ctrl_buff->head++;
+      offset += real_size;
       slot_idx = (slot_idx + 1) % N_HOST_MEM_SLOTS;
     }
-
   }
   CUDACHECK(cudaEventSynchronize(sync_event));
   resetCtrlStatus(ctrl_buff);
@@ -309,40 +287,25 @@ void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
 
   double recv_sum = 0;
   while (offset < count) {
-    if (ongoing_req < N_HOST_MEM_SLOTS && socket_offset < count &&
-        ctrl_buff->head > ctrl_buff->tail) {
-      // has memory slots and there are remaining bytes to receive
-      size_t real_size = std::min((size_t)MEM_SLOT_SIZE, count - socket_offset);
-      void* data_ptr = ctrl_buff->ptr_fifo[next_req_slot];
-      launchSocketRequest(next_req_slot, data_ptr, real_size);
-      next_req_slot = (next_req_slot + 1) % N_HOST_MEM_SLOTS;
-      socket_offset += real_size;
-      ongoing_req++;
-    }
-
-    if (isRequestDone(slot_idx)) {
-      LOG_DEBUG("completed [%s] request, of size %lu",
-                is_send ? "send" : "recv", requests[slot_idx].size);
-
-      offset += requests[slot_idx].size;
-      requests[slot_idx].stage = 0;
-      for (int i = 0; i < requests[slot_idx].n_sub; ++i) {
-        requests[slot_idx].sub_tasks[i]->stage = 0;
+    if (ctrl_buff->head > ctrl_buff->tail) {
+      // there is memory slots
+      int chunk_size = MEM_SLOT_SIZE;
+      if (count - offset < MEM_SLOT_SIZE) {
+        // fill the full memory buff
+        chunk_size = count - offset;
       }
-      // post size of the buffer
-      ctrl_buff->size_fifo[slot_idx] = requests[slot_idx].size;
+      // FIXME: only use first data sock for recv
+      int recv_bytes = ::recv(data_fds[0], ctrl_buff->ptr_fifo[slot_idx], chunk_size, 0);
+      LOG_IF_ERROR(recv_bytes != chunk_size, "receive data from sock %d failed", data_fds[0]);
 
-      // DEBUG
-      recv_sum +=
-          floatSummary((float*)ctrl_buff->ptr_fifo[requests[slot_idx].slot_idx],
-                       requests[slot_idx].size / sizeof(float));
-      // DEBUG
+      // DEBUG sum
+      recv_sum += floatSummary((float*)ctrl_buff->ptr_fifo[slot_idx], chunk_size / sizeof(float));
 
+      ctrl_buff->size_fifo[slot_idx] = chunk_size;
+      slot_idx = (slot_idx+1) % N_HOST_MEM_SLOTS;
+      offset += chunk_size;
       ctrl_buff->tail++;
-      slot_idx = (slot_idx + 1) % N_HOST_MEM_SLOTS;
-      ongoing_req--;
     }
-
   }
   CUDACHECK(cudaEventSynchronize(sync_event));
   resetCtrlStatus(ctrl_buff);
