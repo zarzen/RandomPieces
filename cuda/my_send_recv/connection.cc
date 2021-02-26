@@ -73,16 +73,18 @@ void NetConnection::persistentSocketThread(NetConnection* conn, int tid, SocketT
       LOG_IF_ERROR(t == NULL, "SocketTask t is nullptr");
 
       if (t->stage == 1 && t->offset < t->size) {
-        LOG_DEBUG("working on [%s] fd %d, task %d, stage %d, offset %d, ptr %p, size %d", 
-            conn->is_send ? "send": "recv", t->fd,
-            task_idx, t->stage, t->offset, t->ptr, t->size);
+        // LOG_DEBUG("working on [%s] fd %d, task %d, stage %d, offset %d, ptr %p, size %d", 
+        //     conn->is_send ? "send": "recv", t->fd,
+        //     task_idx, t->stage, t->offset, t->ptr, t->size);
         // progress on this task
         bool res = socketProgressOpt(t->is_send, t->fd, t->ptr, t->size, &t->offset, 0);
         LOG_IF_ERROR(!res, "socket progress failed");
-        
+
         if (t->offset == t->size) {
           sock_queue->head++;  // consumer move, move to next task.
-          LOG_DEBUG("socket queue head move to %lu", sock_queue->head);
+          // LOG_DEBUG("[%s] socket queue fd %d, idx %d, move head to %lu, tail %lu",
+          //           t->is_send? "send": "recv",
+          //           t->fd, task_idx, sock_queue->head, sock_queue->tail);
         }
       }
       
@@ -255,6 +257,12 @@ void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
   }
   CUDACHECK(cudaEventSynchronize(sync_event));
   resetCtrlStatus(ctrl_buff);
+  // reset socketTasks
+  for (int i = 0; i < n_data_socks; ++i) {
+    task_queue[i].head = 0;
+    task_queue[i].tail = 0;
+    memset(task_queue[i].tasks, 0, sizeof(SocketTask) * N_HOST_MEM_SLOTS);
+  }
 }
 
 void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
@@ -316,6 +324,13 @@ void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
   }
   CUDACHECK(cudaEventSynchronize(sync_event));
   resetCtrlStatus(ctrl_buff);
+  // reset socketTasks
+  for (int i = 0; i < n_data_socks; ++i) {
+    task_queue[i].head = 0;
+    task_queue[i].tail = 0;
+    memset(task_queue[i].tasks, 0, sizeof(SocketTask) * N_HOST_MEM_SLOTS);
+  }
+  
 }
 
 

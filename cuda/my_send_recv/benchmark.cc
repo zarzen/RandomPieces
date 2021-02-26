@@ -102,5 +102,8 @@ bool dataIntegrityCheck(void* dev_recv_buff, void* ref_buff, void* tmp_buff, int
   int nbytes = nelem * sizeof(float);
   cudaMemcpy(tmp_buff, dev_recv_buff, nbytes, cudaMemcpyDefault);
   int match = memcmp(tmp_buff, ref_buff, nbytes);
+  // int num = 32;
+  // printFloats("reference floats:", (float*)ref_buff, num);
+  // printFloats("recv floats:", (float*)tmp_buff, num);
   return match == 0;
 }
