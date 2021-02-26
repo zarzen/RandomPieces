@@ -89,3 +89,5 @@ static bool socketProgressOpt(bool is_send, int fd, void* ptr, int size, int* of
 }
 
 void printFloats(const char* prefix, float* buffer, int n);
+
+double floatSummary(float* buff, int nelem);

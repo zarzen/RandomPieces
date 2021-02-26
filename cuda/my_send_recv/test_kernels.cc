@@ -160,8 +160,8 @@ void testRecvKernel(size_t nelem){
   CUDACHECK(cudaMemcpy(host_check_buff, dev_buff, nbytes, cudaMemcpyDefault));
   int match = memcmp(host_buff, host_check_buff, nbytes);
   double bw = nbytes * 8 / (end_time - start_time) / 1e6;
-  // printFloats("reference buffer", (float*)host_buff, 48);
-  // printFloats("recv buffer", (float*)host_check_buff, 48);
+  printFloats("reference buffer", (float*)host_buff, 48);
+  printFloats("recv buffer", (float*)host_check_buff, 48);
   printf("recv kernel integrity check %s, bw %f Gbps \n", match == 0? "true":"false", bw);
 }
 

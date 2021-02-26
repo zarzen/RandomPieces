@@ -207,3 +207,11 @@ void printFloats(const char* prefix, float* buffer, int n) {
   }
   LOG_INFO("%s:%s", prefix, ss.str().c_str());
 }
+
+double floatSummary(float* buff, int nelem) {
+  double sum = 0;
+  for (int i = 0; i < nelem; ++i) {
+    sum += *(buff + i);
+  }
+  return sum;
+}

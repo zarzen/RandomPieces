@@ -10,7 +10,7 @@ inline __device__ void Store128(Pack128* p, Pack128& v) {
   asm volatile("st.volatile.global.v2.u64 [%0], {%1,%2};" :: "l"(p), "l"(v.x), "l"(v.y) : "memory");
 }
 
-inline __device__ void directStore128(Pack128* p, const Pack128* v) {
+inline __device__ void directStore128(Pack128* p, Pack128* v) {
   asm volatile("st.volatile.global.v2.u64 [%0], {%1,%2};" :: "l"(p), "l"(v->x), "l"(v->y) : "memory");
 }
 
@@ -31,11 +31,11 @@ __device__ __forceinline__ void copy128(Pack128* dst,
   dst += offset;
   src += offset;
   while(offset < count) {
-    Pack128 v;
-    Fetch128(v, src);
+    // Pack128 v;
+    // Fetch128(v, src);
     // use directStore cause incorrectness: netRecvKernel fetches wrong data from pinned memory
-    // directStore128(dst, src); 
-    Store128(dst, v);
+    directStore128(dst, src); 
+    // Store128(dst, v);
 
     src += inc;
     dst += inc;
@@ -145,6 +145,7 @@ inline __device__ void waitRecv(volatile size_t* head, volatile size_t* tail) {
   while(*head - *tail >= N_HOST_MEM_SLOTS) {
     // nothing to consume
   }
+  __threadfence_system();
 }
 
 inline __device__ void postRecv(int& tid, volatile size_t* head, int& size_idx) {

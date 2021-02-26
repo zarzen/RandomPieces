@@ -64,6 +64,21 @@ CommunicatorArgs getArgs(int& argc, char* argv[]) {
 
 bool dataIntegrityCheck(void* dev_recv_buff, void* ref_buff, void* tmp_buff, int nelem);
 
+void printMismatch(float* ref, float* recv, int nelem) {
+  int mistmatched = 0;
+  int start = -1;
+  for (int i = 0; i < nelem; ++i) {
+    if (*(ref + i) != *(recv + i)) {
+      mistmatched ++;
+      if (start == -1) {
+        start = i;
+      }
+    }
+  }
+  LOG_INFO("mismatched elems %d, start from elem idx %d", mistmatched, start);
+}
+
+
 int main(int argc, char* argv[]) {
   CommunicatorArgs context = getArgs(argc, argv);
   Communicator comm(context);
@@ -73,6 +88,10 @@ int main(int argc, char* argv[]) {
   void *host_buff, *dev_send_buff, *dev_recv_buff, *host_tmp;
   int nelem = initBuffers(argc, argv, &dev_send_buff, &dev_recv_buff, &host_buff, &host_tmp);
   int nbytes = nelem * sizeof(float);
+  CUDACHECK(cudaMemcpy(host_tmp, dev_send_buff, nbytes, cudaMemcpyDefault));
+  double buffer_sum = floatSummary((float*)host_buff, nelem);
+  double dev_buffer_sum = floatSummary((float*)host_tmp, nelem);
+  LOG_INFO("host buff summary %f, on device value sum %f", buffer_sum, dev_buffer_sum);
   LOG_INFO("benchmarking send recv nbytes %d", nbytes);
 
   int next_peer = (context.rank + 1) % context.nranks;
@@ -92,6 +111,10 @@ int main(int argc, char* argv[]) {
 
     c = dataIntegrityCheck(dev_recv_buff, host_buff, host_tmp, nelem);
     LOG_INFO("received buffer equals to send buffer %s (suppose true)", c? "true":"false");
+    if (!c) {
+      cudaMemcpy(host_tmp, dev_recv_buff, nbytes, cudaMemcpyDefault);
+      printMismatch((float*)host_buff, (float*)host_tmp, nelem);
+    }
     cudaMemset(dev_recv_buff, 0, nbytes);
   }
   double avg_time = acc_time / REPEAT_EXP;
@@ -102,8 +125,8 @@ bool dataIntegrityCheck(void* dev_recv_buff, void* ref_buff, void* tmp_buff, int
   int nbytes = nelem * sizeof(float);
   cudaMemcpy(tmp_buff, dev_recv_buff, nbytes, cudaMemcpyDefault);
   int match = memcmp(tmp_buff, ref_buff, nbytes);
-  // int num = 32;
-  // printFloats("reference floats:", (float*)ref_buff, num);
-  // printFloats("recv floats:", (float*)tmp_buff, num);
+  int num = 32;
+  // printFloats("reference floats:", (float*)ref_buff + (nelem - num), num);
+  // printFloats("recv floats:", (float*)tmp_buff + (nelem - num), num);
   return match == 0;
 }
