@@ -224,20 +224,14 @@ void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
   int next_req_slot = 0;
   size_t last_tail = 0;
 
-  // DEUBG
-  double send_sum = 0;
-  // DEBUG
   while (offset < count) {
     if (ctrl_buff->head < ctrl_buff->tail + N_HOST_MEM_SLOTS) {
       int real_size = ctrl_buff->size_fifo[slot_idx];
       // FIXME: for now only use first data socket with sync socket operation
       int send_bytes = ::send(data_fds[0], ctrl_buff->ptr_fifo[slot_idx], real_size, 0);
       LOG_IF_ERROR(send_bytes != real_size, "send data via sock fd %d failed", data_fds[0]);
-      LOG_DEBUG("send size %d, fd %d", real_size, data_fds[0]);
+      // LOG_DEBUG("send size %d, fd %d", real_size, data_fds[0]);
 
-      // DEBUG sum
-      send_sum += floatSummary((float*)ctrl_buff->ptr_fifo[slot_idx], real_size/sizeof(float));
-      
       ctrl_buff->size_fifo[slot_idx] = 0;
       ctrl_buff->head++;
       offset += real_size;
@@ -253,8 +247,6 @@ void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
     memset(task_queue[i].tasks, 0, sizeof(SocketTask) * N_HOST_MEM_SLOTS);
   }
 
-  // DEBUG
-  LOG_DEBUG("send sum %f", send_sum);
 }
 
 void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
@@ -275,7 +267,7 @@ void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
   void* kernel_args[3] = {&buff, &ctrl_buff, &count};
   CUDACHECK(cudaLaunchKernel((void*)netRecvKernel, dim3(1), dim3(n_cuda_threads), kernel_args, 0, stream));
   CUDACHECK(cudaEventRecord(sync_event, stream));
-  LOG_DEBUG("Launched netRecvKernel, ptr %p, size %lu", buff, count);
+  // LOG_DEBUG("Launched netRecvKernel, ptr %p, size %lu", buff, count);
 
   // launch socket requests 
   // init variables
@@ -286,7 +278,6 @@ void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
   int ongoing_req = 0;
   size_t last_tail = 0;
 
-  double recv_sum = 0;
   while (offset < count) {
     if (ctrl_buff->head > ctrl_buff->tail) {
       // there is memory slots
@@ -301,9 +292,6 @@ void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
           recv_bytes != chunk_size,
           "receive data from sock %d failed, ret %d, chunksize %d, err %s",
           data_fds[0], recv_bytes, chunk_size, strerror(errno));
-
-      // DEBUG sum
-      recv_sum += floatSummary((float*)ctrl_buff->ptr_fifo[slot_idx], chunk_size / sizeof(float));
 
       ctrl_buff->size_fifo[slot_idx] = chunk_size;
       slot_idx = (slot_idx+1) % N_HOST_MEM_SLOTS;
@@ -320,9 +308,6 @@ void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
     memset(task_queue[i].tasks, 0, sizeof(SocketTask) * N_HOST_MEM_SLOTS);
   }
   
-  // DEBUG 
-  LOG_DEBUG("recv sum %f", recv_sum);
-  // DEBUG 
 }
 
 
