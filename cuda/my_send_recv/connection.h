@@ -91,6 +91,7 @@ class NetConnection : public Connection {
   void launchBackgroundThreads();
   static void persistentSocketThread(NetConnection* conn, int tid, SocketTaskQueue* task_queue);
 
+  int executeWait(void* ptr, int nbytes, bool is_send);
   void launchSocketRequest(int idx, void* ptr, int size);
   bool isRequestDone(int idx);
  public:

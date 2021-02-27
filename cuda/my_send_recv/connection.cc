@@ -73,21 +73,14 @@ void NetConnection::persistentSocketThread(NetConnection* conn, int tid, SocketT
       LOG_IF_ERROR(t == NULL, "SocketTask t is nullptr");
 
       if (t->stage == 1 && t->offset < t->size) {
-        // LOG_DEBUG("working on [%s] fd %d, task %d, stage %d, offset %d, ptr %p, size %d", 
-        //     conn->is_send ? "send": "recv", t->fd,
-        //     task_idx, t->stage, t->offset, t->ptr, t->size);
         // progress on this task
         bool res = socketProgressOpt(t->is_send, t->fd, t->ptr, t->size, &t->offset, 0);
         LOG_IF_ERROR(!res, "socket progress failed");
 
         if (t->offset == t->size) {
           sock_queue->head++;  // consumer move, move to next task.
-          // LOG_DEBUG("[%s] socket queue fd %d, idx %d, move head to %lu, tail %lu",
-          //           t->is_send? "send": "recv",
-          //           t->fd, task_idx, sock_queue->head, sock_queue->tail);
         }
       }
-      
     }
   }
 }
@@ -201,6 +194,27 @@ bool NetConnection::isRequestDone(int idx) {
   return false;
 }
 
+int NetConnection::executeWait(void* ptr, int nbytes, bool is_send) {
+  // find a empty request slot
+  int req_slot_idx = -1;
+  for (int i = 0; i < N_HOST_MEM_SLOTS; ++i) {
+    if (requests[i].stage == 0) {
+      req_slot_idx = i;
+      break;
+    }
+  }
+  if (req_slot_idx == -1) {
+    LOG_ERROR("cannot find empty socket request slot, return -1");
+    return -1;
+  }
+
+  launchSocketRequest(req_slot_idx, ptr, nbytes);
+  while (!isRequestDone(req_slot_idx)) {
+    std::this_thread::sleep_for(std::chrono::microseconds(100));
+  }
+  return nbytes;
+}
+
 void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
   // TODO: 
   // send the data size to peer, then launch netSendKernel
@@ -228,7 +242,8 @@ void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
     if (ctrl_buff->head < ctrl_buff->tail + N_HOST_MEM_SLOTS) {
       int real_size = ctrl_buff->size_fifo[slot_idx];
       // FIXME: for now only use first data socket with sync socket operation
-      int send_bytes = ::send(data_fds[0], ctrl_buff->ptr_fifo[slot_idx], real_size, 0);
+      // int send_bytes = ::send(data_fds[0], ctrl_buff->ptr_fifo[slot_idx], real_size, 0);
+      int send_bytes = executeWait(ctrl_buff->ptr_fifo[slot_idx], real_size, this->is_send);
       LOG_IF_ERROR(send_bytes != real_size, "send data via sock fd %d failed", data_fds[0]);
       // LOG_DEBUG("send size %d, fd %d", real_size, data_fds[0]);
 
@@ -274,9 +289,7 @@ void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
   size_t offset = 0; // denotes completed offset
   size_t socket_offset = 0; // denotes ongoing socket offset
   int slot_idx = 0; // equal to ctrl_buff->size_idx
-  int next_req_slot = 0;
-  int ongoing_req = 0;
-  size_t last_tail = 0;
+  volatile size_t* tail_ptr = &ctrl_buff->tail;
 
   while (offset < count) {
     if (ctrl_buff->head > ctrl_buff->tail) {
@@ -287,7 +300,8 @@ void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
         chunk_size = count - offset;
       }
       // FIXME: only use first data sock for recv
-      int recv_bytes = ::recv(data_fds[0], ctrl_buff->ptr_fifo[slot_idx], chunk_size, MSG_WAITALL);
+      // int recv_bytes = ::recv(data_fds[0], ctrl_buff->ptr_fifo[slot_idx], chunk_size, MSG_WAITALL);
+      int recv_bytes = this->executeWait(ctrl_buff->ptr_fifo[slot_idx], chunk_size, this->is_send);
       LOG_IF_ERROR(
           recv_bytes != chunk_size,
           "receive data from sock %d failed, ret %d, chunksize %d, err %s",
@@ -296,7 +310,8 @@ void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
       ctrl_buff->size_fifo[slot_idx] = chunk_size;
       slot_idx = (slot_idx+1) % N_HOST_MEM_SLOTS;
       offset += chunk_size;
-      ctrl_buff->tail++;
+      // ctrl_buff->tail++;
+      (*tail_ptr)++;
     }
   }
   CUDACHECK(cudaEventSynchronize(sync_event));
