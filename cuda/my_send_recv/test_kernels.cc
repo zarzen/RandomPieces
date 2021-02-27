@@ -21,6 +21,7 @@ void dev2HostBandwidth(void* dev_buff, size_t nbytes, int repeat) {
   void* pinned_host_mem;
   CUDACHECK(cudaHostAlloc(&pinned_host_mem, N_HOST_MEM_SLOTS * MEM_SLOT_SIZE,
                           cudaHostAllocMapped));
+  void* tmp_host = malloc(MEM_SLOT_SIZE);
   double acc_time = 0;
   double acc_kernel_time = 0;
   cudaEvent_t start, stop;
@@ -49,6 +50,8 @@ void dev2HostBandwidth(void* dev_buff, size_t nbytes, int repeat) {
         // item to consume
         int _idx = task_info->size_idx;
         int real_size = task_info->size_fifo[_idx];
+        memcpy((char*)tmp_host, task_info->ptr_fifo[_idx],
+             real_size);
         // consume the buffer immediately
         task_info->head++;
         offset += real_size;
@@ -194,7 +197,7 @@ void testRecvKernel(size_t nelem){
 }
 
 int main() {
-  size_t nelem = 4 * 1024 * 1024 + 1024; 
+  size_t nelem = 2 * 1024 * 1024 + 100; 
   // size_t nelem = 48;
 
   printf("test kernels\n");

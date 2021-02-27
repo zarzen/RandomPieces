@@ -19,23 +19,32 @@ inline __device__ void directVStore(T* d, T* s) {
   *d = *s;
 }
 
-__device__ __forceinline__ void copy128(Pack128* dst,
+template<int UNROLL>
+__device__ __forceinline__ void unrollCopy128(Pack128* dst,
                                         Pack128* src,
-                                        size_t count,
+                                        int count,
                                         int tid,
                                         int nw,
                                         int w,
                                         int t) {
-  int offset = w  * WARP_SIZE + t;
-  int inc = nw * WARP_SIZE;
+  int offset = w * WARP_SIZE * UNROLL + t;
+  int inc = nw * UNROLL * WARP_SIZE;
+
   dst += offset;
   src += offset;
-  while(offset < count) {
-    // Pack128 v;
-    // Fetch128(v, src);
-    // use directStore cause incorrectness: netRecvKernel fetches wrong data from pinned memory
-    directStore128(dst, src); 
-    // Store128(dst, v);
+
+  while (offset < count) {
+    Pack128 vals[UNROLL];
+
+    #pragma unroll
+    for (int u = 0; u < UNROLL; ++u) {
+      Fetch128(vals[u], src + u * WARP_SIZE);
+    }
+
+    #pragma unroll
+    for (int u = 0; u < UNROLL; ++u) {
+      Store128(dst + u * WARP_SIZE, vals[u]);
+    }
 
     src += inc;
     dst += inc;
@@ -43,7 +52,21 @@ __device__ __forceinline__ void copy128(Pack128* dst,
   }
 }
 
-inline __device__ void copyChars(char* dst, char* src, size_t count, int tid, int nw, int w, int t) {
+__device__ __forceinline__ void
+move128(Pack128* dst, Pack128* src, int& nelem, int& tid, int& nw, int& w, int& t) {
+  int n_unroll_pack =
+      (nelem / (WARP_SIZE * DEFAULT_UNROLL)) * (WARP_SIZE * DEFAULT_UNROLL);
+  // int n_unroll_bytes = n_unroll_pack * sizeof(Pack128);
+  int n_pack_remain = nelem - n_unroll_pack;
+
+  // use unroll version first
+  unrollCopy128<DEFAULT_UNROLL>(dst, src, n_unroll_pack, tid, nw, w, t);
+
+  unrollCopy128<1>(dst+n_unroll_pack, src + n_unroll_pack, n_pack_remain, tid, nw, w, t);
+
+}
+
+inline __device__ void copyChars(char* dst, char* src, int count, int tid, int nw, int w, int t) {
   int offset = w * WARP_SIZE + t;
   int inc = nw * WARP_SIZE;
   src += offset;
@@ -118,7 +141,7 @@ __global__ void netSendKernel(void* send_buff, struct hostDevShmInfo* info, size
   for (int i = 0; i < n_steps; ++i) {
     waitSend(head, tail);
     // copy to host memory
-    copy128((Pack128*)(ptr_fifo[size_idx]), (Pack128*)(src + send_offset),
+    move128((Pack128*)(ptr_fifo[size_idx]), (Pack128*)(src + send_offset),
             n_pack128_each_slot, tid, nw, w, t);
     
     postSend(tail, size_idx, size_fifo, host_slot_size, tid);
@@ -131,7 +154,7 @@ __global__ void netSendKernel(void* send_buff, struct hostDevShmInfo* info, size
   if (remain > 0) {
     waitSend(head, tail);
     int n_pack128 = remain / sizeof(Pack128);
-    copy128((Pack128*)(ptr_fifo[size_idx]), (Pack128*)(src + send_offset),
+    move128((Pack128*)(ptr_fifo[size_idx]), (Pack128*)(src + send_offset),
             n_pack128, tid, nw, w, t);
     int copied_bytes = n_pack128 * sizeof(Pack128);
     send_offset += copied_bytes;
@@ -161,6 +184,8 @@ inline __device__ void postRecv(int& tid, volatile size_t* head, int& size_idx) 
   __syncthreads();
 }
 
+
+
 __global__ void netRecvKernel(void* recv_buff, struct hostDevShmInfo* info, size_t count_bytes) {
   int nthreads = gridDim.x * blockDim.x;
   int tid = blockDim.x * blockIdx.x + threadIdx.x;
@@ -183,14 +208,15 @@ __global__ void netRecvKernel(void* recv_buff, struct hostDevShmInfo* info, size
   int host_slot_size = MEM_SLOT_SIZE;
   size_t n_steps = count_bytes / host_slot_size;
   int n_pack128_each_slot = host_slot_size / sizeof(Pack128);
+
   size_t offset = 0;
   char* dst = (char*)recv_buff;
 
   // always fill the Mem slot
   for (int i = 0; i < n_steps; ++i) {
     waitRecv(head, tail);
-    // copy to device
-    copy128((Pack128*)(dst + offset), (Pack128*)ptr_fifo[size_idx],
+
+    move128((Pack128*)(dst + offset), (Pack128*)ptr_fifo[size_idx],
             n_pack128_each_slot, tid, nw, w, t);
 
     postRecv(tid, head, size_idx);
@@ -203,7 +229,7 @@ __global__ void netRecvKernel(void* recv_buff, struct hostDevShmInfo* info, size
   if (remain > 0) {
     waitRecv(head, tail);
     int n_pack128 = remain / sizeof(Pack128);
-    copy128((Pack128*)(dst + offset), (Pack128*)ptr_fifo[size_idx], n_pack128,
+    move128((Pack128*)(dst + offset), (Pack128*)ptr_fifo[size_idx], n_pack128,
             tid, nw, w, t);
     int copied_bytes = n_pack128 * sizeof(Pack128);
     offset += copied_bytes;
@@ -229,8 +255,8 @@ __global__ void p2pSendKernel(void* dst_buff, void* src_buff, size_t count) {
   Pack128* pack128_dst = (Pack128*)dst_buff;
   Pack128* pack128_src = (Pack128*)src_buff;
 
-  size_t pack128_count = count / sizeof(Pack128);
-  copy128(pack128_dst, pack128_src, pack128_count, tid, nw, w, t);
+  int pack128_count = count / sizeof(Pack128);
+  move128(pack128_dst, pack128_src, pack128_count, tid, nw, w, t);
 
   size_t pack128_offset = pack128_count * sizeof(Pack128);
   size_t remain = count - pack128_offset;
