@@ -139,51 +139,62 @@ void testRecvKernel(size_t nelem){
   allocDevCtrl(&task_info);
 
   void* kernel_args[3] = {&dev_buff, &task_info, &nbytes};
-  double start_time = timeMs();
+  
   cudaStream_t stream;
   cudaStreamCreate(&stream);
-  CUDACHECK(cudaLaunchKernel((void*)netRecvKernel, dim3(1), dim3(256), kernel_args, 0, stream));
-  size_t offset = 0;
-  int slot_idx = 0;
-  while (offset < nbytes) {
-    if (task_info->head > task_info->tail) { 
-      // there is memory slots
-      int chunk_size = MEM_SLOT_SIZE;
-      if (nbytes - offset < MEM_SLOT_SIZE) {
-        // fill the full memory buff
-        chunk_size = nbytes - offset;
+  
+  int repeat = 10;
+  int warm_up = 5;
+  for (int i = 0; i < repeat; ++i) {
+    double start_time = timeMs();
+    CUDACHECK(cudaLaunchKernel((void*)netRecvKernel, dim3(1), dim3(320), kernel_args, 0, stream));
+    size_t offset = 0;
+    int slot_idx = 0;
+    while (offset < nbytes) {
+      if (task_info->head > task_info->tail) {
+        // there is memory slots
+        int chunk_size = MEM_SLOT_SIZE;
+        if (nbytes - offset < MEM_SLOT_SIZE) {
+          // fill the full memory buff
+          chunk_size = nbytes - offset;
+        }
+        double start_time = timeMs();
+
+        // std::this_thread::sleep_for(std::chrono::milliseconds(3));
+        memcpy(task_info->ptr_fifo[slot_idx], (char*)host_buff + offset,
+               chunk_size);
+
+        // LOG_INFO("head %lu, tail %lu, slot_idx %d, ptr %p", task_info->head,
+        //          task_info->tail, slot_idx, task_info->ptr_fifo[slot_idx]);
+        // printFloats("intermediate", (float*)task_info->ptr_fifo[slot_idx],
+        // 4);
+
+        // printf("moved %d into slot%d, head %lu, tail %lu\n", chunk_size,
+        // slot_idx, task_info->head, task_info->tail);
+        task_info->size_fifo[slot_idx] = chunk_size;
+        slot_idx = (slot_idx + 1) % N_HOST_MEM_SLOTS;
+        offset += chunk_size;
+        task_info->tail++;
+
+        // printf("memcpy bw %f Gbps\n", chunk_size * 8 / (timeMs() -
+        // start_time) / 1e6);
       }
-      double start_time = timeMs();
-
-      std::this_thread::sleep_for(std::chrono::milliseconds(3));
-      memcpy(task_info->ptr_fifo[slot_idx], (char*)host_buff + offset,
-             chunk_size);
-
-      // LOG_INFO("head %lu, tail %lu, slot_idx %d, ptr %p", task_info->head,
-      //          task_info->tail, slot_idx, task_info->ptr_fifo[slot_idx]);
-      // printFloats("intermediate", (float*)task_info->ptr_fifo[slot_idx], 4);
-
-      // printf("moved %d into slot%d, head %lu, tail %lu\n", chunk_size, slot_idx, task_info->head, task_info->tail);
-      task_info->size_fifo[slot_idx] = chunk_size;
-      slot_idx = (slot_idx+1) % N_HOST_MEM_SLOTS;
-      offset += chunk_size;
-      task_info->tail++;
-      
-      // printf("memcpy bw %f Gbps\n", chunk_size * 8 / (timeMs() - start_time) / 1e6);
     }
+    CUDACHECK(cudaDeviceSynchronize());
+    double end_time = timeMs();
+    CUDACHECK(cudaMemcpy(host_check_buff, dev_buff, nbytes, cudaMemcpyDefault));
+    int match = memcmp(host_buff, host_check_buff, nbytes);
+    double bw = nbytes * 8 / (end_time - start_time) / 1e6;
+    // printFloats("reference buffer", (float*)host_buff, 48);
+    // printFloats("recv buffer", (float*)host_check_buff, 48);
+    printf("recv kernel integrity check %s, bw %f Gbps \n",
+           match == 0 ? "true" : "false", bw);
   }
-  CUDACHECK(cudaDeviceSynchronize());
-  double end_time = timeMs();
-  CUDACHECK(cudaMemcpy(host_check_buff, dev_buff, nbytes, cudaMemcpyDefault));
-  int match = memcmp(host_buff, host_check_buff, nbytes);
-  double bw = nbytes * 8 / (end_time - start_time) / 1e6;
-  printFloats("reference buffer", (float*)host_buff, 48);
-  printFloats("recv buffer", (float*)host_check_buff, 48);
-  printf("recv kernel integrity check %s, bw %f Gbps \n", match == 0? "true":"false", bw);
+  
 }
 
 int main() {
-  size_t nelem = 8 * 1024 * 1024 + 1024; 
+  size_t nelem = 4 * 1024 * 1024 + 1024; 
   // size_t nelem = 48;
 
   printf("test kernels\n");
