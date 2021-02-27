@@ -233,6 +233,7 @@ void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
       // FIXME: for now only use first data socket with sync socket operation
       int send_bytes = ::send(data_fds[0], ctrl_buff->ptr_fifo[slot_idx], real_size, 0);
       LOG_IF_ERROR(send_bytes != real_size, "send data via sock fd %d failed", data_fds[0]);
+      LOG_DEBUG("send size %d, fd %d", real_size, data_fds[0]);
 
       // DEBUG sum
       send_sum += floatSummary((float*)ctrl_buff->ptr_fifo[slot_idx], real_size/sizeof(float));
@@ -295,8 +296,11 @@ void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
         chunk_size = count - offset;
       }
       // FIXME: only use first data sock for recv
-      int recv_bytes = ::recv(data_fds[0], ctrl_buff->ptr_fifo[slot_idx], chunk_size, 0);
-      LOG_IF_ERROR(recv_bytes != chunk_size, "receive data from sock %d failed", data_fds[0]);
+      int recv_bytes = ::recv(data_fds[0], ctrl_buff->ptr_fifo[slot_idx], chunk_size, MSG_WAITALL);
+      LOG_IF_ERROR(
+          recv_bytes != chunk_size,
+          "receive data from sock %d failed, ret %d, chunksize %d, err %s",
+          data_fds[0], recv_bytes, chunk_size, strerror(errno));
 
       // DEBUG sum
       recv_sum += floatSummary((float*)ctrl_buff->ptr_fifo[slot_idx], chunk_size / sizeof(float));

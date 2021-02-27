@@ -85,21 +85,34 @@ void testSendKernel(size_t& nelem) {
   hostDevShmInfo* task_info;
   allocDevCtrl(&task_info);
 
+  double buffer_sum = floatSummary((float*)host_buff, nelem);
+  LOG_INFO("host buff summary %f", buffer_sum);
+
   // launch netSendKernel to move the data from dev to host
   // first round do the data integrity check
   void* kernel_args[3] = {&dev_buff, &task_info, &nbytes};
   printf("kernel_args: %p, %p, %lu\n", dev_buff, (void*)task_info, nbytes);
-  CUDACHECK(cudaLaunchKernel((void*)netSendKernel, dim3(1), dim3(32), kernel_args, 0, NULL));
+  cudaStream_t stream;
+  cudaStreamCreate(&stream);
+  CUDACHECK(cudaLaunchKernel((void*)netSendKernel, dim3(1), dim3(320), kernel_args, 0, stream));
   void* host_saveto = host_check_buff;
+  int first_match = memcmp(host_buff, host_check_buff, nbytes);
+  LOG_INFO("first match %s", first_match == 0? "true":"false");
+
   size_t offset = 0;
+  double test_sum_ = 0;
   // printf("->>> info head %zu\n", task_info->head);
   while (offset < nbytes) {
     if (task_info->head < task_info->tail + N_HOST_MEM_SLOTS) {
       // item to consume
       int _idx = task_info->size_idx;
       int real_size = task_info->size_fifo[_idx];
+
       memcpy((char*)host_saveto + offset, task_info->ptr_fifo[_idx],
              real_size);
+      // std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      test_sum_ += floatSummary((float*)task_info->ptr_fifo[_idx], real_size / sizeof(float));
+
       task_info->head++;
       offset += real_size;
       task_info->size_fifo[_idx] = 0;
@@ -109,7 +122,9 @@ void testSendKernel(size_t& nelem) {
   }
   int match = memcmp(host_buff, host_saveto, nbytes);
   CUDACHECK(cudaDeviceSynchronize());
+  LOG_INFO("saveto_buf sum %f", floatSummary((float*)host_saveto, nelem));
   printf("data integrity %s \n", match == 0? "true":"false");
+  LOG_INFO("test_send_sum %f", test_sum_);
   // then do bandwidth test
   dev2HostBandwidth(dev_buff, nbytes, 20);
 }
@@ -127,7 +142,7 @@ void testRecvKernel(size_t nelem){
   double start_time = timeMs();
   cudaStream_t stream;
   cudaStreamCreate(&stream);
-  CUDACHECK(cudaLaunchKernel((void*)netRecvKernel, dim3(1), dim3(512), kernel_args, 0, stream));
+  CUDACHECK(cudaLaunchKernel((void*)netRecvKernel, dim3(1), dim3(256), kernel_args, 0, stream));
   size_t offset = 0;
   int slot_idx = 0;
   while (offset < nbytes) {
@@ -139,6 +154,8 @@ void testRecvKernel(size_t nelem){
         chunk_size = nbytes - offset;
       }
       double start_time = timeMs();
+
+      std::this_thread::sleep_for(std::chrono::milliseconds(3));
       memcpy(task_info->ptr_fifo[slot_idx], (char*)host_buff + offset,
              chunk_size);
 
@@ -166,7 +183,7 @@ void testRecvKernel(size_t nelem){
 }
 
 int main() {
-  size_t nelem = 16 * 1024 * 1024 + 5000; 
+  size_t nelem = 8 * 1024 * 1024 + 1024; 
   // size_t nelem = 48;
 
   printf("test kernels\n");

@@ -89,7 +89,11 @@ int main(int argc, char* argv[]) {
   int nelem = initBuffers(argc, argv, &dev_send_buff, &dev_recv_buff, &host_buff, &host_tmp);
   int nbytes = nelem * sizeof(float);
   CUDACHECK(cudaMemcpy(host_tmp, dev_send_buff, nbytes, cudaMemcpyDefault));
-  double buffer_sum = floatSummary((float*)host_buff, nelem);
+  double buffer_sum = 0;
+  for (int i = 0; i < nbytes / MEM_SLOT_SIZE; ++i) {
+    char* b = (char*)host_buff;
+    buffer_sum += floatSummary((float*)(b + MEM_SLOT_SIZE * i), MEM_SLOT_SIZE / sizeof(float));
+  }
   double dev_buffer_sum = floatSummary((float*)host_tmp, nelem);
   LOG_INFO("host buff summary %f, on device value sum %f", buffer_sum, dev_buffer_sum);
   LOG_INFO("benchmarking send recv nbytes %d", nbytes);

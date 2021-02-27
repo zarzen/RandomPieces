@@ -70,14 +70,19 @@ inline __device__ void postSend(volatile size_t* tail,
                                 volatile int* size_fifo,
                                 int& n_bytes,
                                 int tid) {
+
   if (tid == 0) {
     size_fifo[size_idx] = n_bytes;
     (*tail)++;
+    // make the write to shared memory visible to host threads
     __threadfence_system();
-    // printf("kernel post size %d\n", n_bytes);
   }
-
   size_idx = (++size_idx) % N_HOST_MEM_SLOTS;
+  // only 1 block, so sync within threads is good enough
+  // besides, sync at this point makes copy kernel behave correctly
+  // TODO: figure out why
+  __syncthreads(); 
+
 }
 
 inline __device__ void barrier(int& nthreads) {
@@ -115,7 +120,7 @@ __global__ void netSendKernel(void* send_buff, struct hostDevShmInfo* info, size
     // copy to host memory
     copy128((Pack128*)(ptr_fifo[size_idx]), (Pack128*)(src + send_offset),
             n_pack128_each_slot, tid, nw, w, t);
-    barrier(nthreads);
+    
     postSend(tail, size_idx, size_fifo, host_slot_size, tid);
     send_offset += host_slot_size;
   }
@@ -135,7 +140,6 @@ __global__ void netSendKernel(void* send_buff, struct hostDevShmInfo* info, size
       void* dst = ptr_fifo[size_idx] + copied_bytes;
       copyChars((char*)dst, src + send_offset, remain, tid, nw, w, t);
     }
-    barrier(nthreads);
     postSend(tail, size_idx, size_fifo, last_chunk, tid);
   }
 
@@ -145,7 +149,7 @@ inline __device__ void waitRecv(volatile size_t* head, volatile size_t* tail) {
   while(*head - *tail >= N_HOST_MEM_SLOTS) {
     // nothing to consume
   }
-  __threadfence_system();
+  // __threadfence_system();
 }
 
 inline __device__ void postRecv(int& tid, volatile size_t* head, int& size_idx) {
@@ -153,6 +157,8 @@ inline __device__ void postRecv(int& tid, volatile size_t* head, int& size_idx) 
     ++(*head);
   }
   size_idx = (size_idx + 1) % N_HOST_MEM_SLOTS;
+  // because only use one block
+  __syncthreads();
 }
 
 __global__ void netRecvKernel(void* recv_buff, struct hostDevShmInfo* info, size_t count_bytes) {
@@ -186,10 +192,9 @@ __global__ void netRecvKernel(void* recv_buff, struct hostDevShmInfo* info, size
     // copy to device
     copy128((Pack128*)(dst + offset), (Pack128*)ptr_fifo[size_idx],
             n_pack128_each_slot, tid, nw, w, t);
-    barrier(nthreads);
+
     postRecv(tid, head, size_idx);
     offset += host_slot_size;
-    // printf("tid %d, step %d, offset %lu, head %lu, tail %lu, size_idx %d \n", tid, i, offset, *head, *tail, size_idx);
   }
 
   int last_chunk = count_bytes - offset;
@@ -208,8 +213,9 @@ __global__ void netRecvKernel(void* recv_buff, struct hostDevShmInfo* info, size
       copyChars(dst + offset, ptr_fifo[size_idx] + copied_bytes, remain, tid,
                 nw, w, t);
     }
-    barrier(nthreads);
+
     postRecv(tid, head, size_idx);
+
   }
 }
 

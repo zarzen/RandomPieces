@@ -32,6 +32,7 @@ static inline void hostAlloc(T** ptr, size_t nelem) {
 
 template<typename T>
 static inline void fillVals(T* buff, size_t count) {
+  srand(123);
   for (int i = 0; i < count; ++i) {
     T e = static_cast<T>(rand()) / static_cast<T>(RAND_MAX);
     buff[i] = e;
