@@ -8,6 +8,7 @@
 #define N_ELEM (1024 * 1024)
 #define RAND_SEED 123
 #define REPEAT_EXP 10
+#define WARM_UP 5
 
 void fillRandFloats(float* buffer, int nelem) {
   srand(RAND_SEED);
@@ -111,7 +112,9 @@ int main(int argc, char* argv[]) {
 
     waitTask(send_handle, comm);
     waitTask(recv_handle, comm);
-    acc_time += (timeMs() - start);
+    if (i >= WARM_UP) {
+      acc_time += (timeMs() - start);
+    }
 
     c = dataIntegrityCheck(dev_recv_buff, host_buff, host_tmp, nelem);
     LOG_INFO("received buffer equals to send buffer %s (suppose true)", c? "true":"false");
@@ -121,7 +124,7 @@ int main(int argc, char* argv[]) {
     }
     cudaMemset(dev_recv_buff, 0, nbytes);
   }
-  double avg_time = acc_time / REPEAT_EXP;
+  double avg_time = acc_time / (REPEAT_EXP - WARM_UP);
   LOG_INFO("average time cost %f ms, bandwidth %f Gbps", avg_time, nbytes * 8 / avg_time / 1e6);
 }
 

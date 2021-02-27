@@ -212,6 +212,12 @@ int NetConnection::executeWait(void* ptr, int nbytes, bool is_send) {
   while (!isRequestDone(req_slot_idx)) {
     std::this_thread::sleep_for(std::chrono::microseconds(100));
   }
+
+  // clear status
+  requests[req_slot_idx].stage = 0;
+  for (int i = 0; i < requests[req_slot_idx].n_sub; ++i) {
+    requests[req_slot_idx].sub_tasks[i]->stage = 0;
+  }
   return nbytes;
 }
 
