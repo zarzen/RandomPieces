@@ -71,6 +71,7 @@ struct SocketRequest {
 
 // TCP network connection
 class NetConnection : public Connection {
+  std::mutex op_mtx;
   bool close;
   int n_cuda_threads;
   cudaEvent_t sync_event;
