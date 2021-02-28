@@ -20,8 +20,8 @@ using std::thread;
 // record context informations
 //
 class Communicator {
-  int N_SOCKET = 8;
-  int N_SOCKET_THREAD = 2;
+  int N_SOCKET = 4;
+  int N_SOCKET_THREAD = 1;
   cudaStream_t send_stream;
   cudaStream_t recv_stream;
 

@@ -85,16 +85,24 @@ void NetConnection::persistentSocketThread(NetConnection* conn, int tid, SocketT
       LOG_IF_ERROR(task->stage != 1, "using a socket task stage %d", task->stage);
 
       if (task->is_send) {
+        double s = timeMs();
         ret = ::send(task->fd, task->ptr, task->size, MSG_WAITALL);
         LOG_IF_ERROR(ret != task->size, "send socket task failed");
+        LOG_DEBUG("tid %d, send, size %d, fd %d, bw %f Gbps", tid, task->size,
+                  task->fd, task->size * 8 / (timeMs() - s) / 1e6);
       } else {
+        double s = timeMs();
         ret = ::recv(task->fd, task->ptr, task->size, MSG_WAITALL);
         LOG_IF_ERROR(ret != task->size, "recv socket task failed");
+        LOG_DEBUG("tid %d, recv, size %d, fd %d, bw %f Gbps", tid, task->size,
+                  task->fd, task->size * 8 / (timeMs() - s) / 1e6);
       }
 
       task->stage = 2;
       task_queue->completion_count++;
       task = nullptr;
+    } else {
+      std::this_thread::yield();
     }
   }
 }
@@ -184,7 +192,7 @@ SocketRequest* NetConnection::launchSocketRequest(void* ptr, int size) {
     }
 
     {
-      std::lock_guard<std::mutex> lk(this->completed_task_mtx);
+      // std::lock_guard<std::mutex> lk(this->completed_task_mtx);
       t = completed_tasks.front();
       completed_tasks.pop();
     }
@@ -275,6 +283,7 @@ void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
     
     if (tail_last_seen < ctrl_buff->tail) {
       // launch requests
+      double s = timeMs();
       int real_size = ctrl_buff->size_fifo[next_req_slot];
       SocketRequest* req = launchSocketRequest(ctrl_buff->ptr_fifo[next_req_slot], real_size);
 
@@ -287,6 +296,7 @@ void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
         tail_last_seen++;
         ongoing_requests.push(req);
       }
+      LOG_DEBUG("launch one send request cost %f ms", timeMs() - s);
     }
 
     if (!ongoing_requests.empty()) {
@@ -350,6 +360,7 @@ void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
   while (offset < count) {
 
     if (socket_offset < count && ctrl_buff->head > tail_local) {
+      double s = timeMs();
       // there is memory slots for launch socket task
       int real_size = MEM_SLOT_SIZE < (count - socket_offset) ? MEM_SLOT_SIZE : (count - socket_offset);
       SocketRequest* req = launchSocketRequest(ctrl_buff->ptr_fifo[next_req_slot], real_size);
@@ -366,6 +377,7 @@ void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
         tail_local++;
         socket_offset += real_size;
       }
+      LOG_DEBUG("launch one recv request cost %f ms", timeMs() - s);
     }
 
     if (!ongoing_requests.empty()) {
