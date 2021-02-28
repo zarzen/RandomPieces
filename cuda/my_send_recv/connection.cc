@@ -19,9 +19,10 @@ void NetConnection::initBuffer() {
   allocDevCtrl(&ctrl_buff);
   CUDACHECK(cudaEventCreate(&sync_event));
 
-  sock_task_queues.reserve(n_data_socks);
+  // sock_task_queues.reserve(n_data_socks);
   for (int i = 0; i < n_data_socks; ++i) {
     sock_task_queues.push_back(new SocketTaskQueue());
+    LOG_IF_ERROR(sock_task_queues[i] == nullptr, "sock_task_queues[i] is null");
   }
 
   // at most has N_HOST_MEM_SLOTS requests
@@ -31,7 +32,9 @@ void NetConnection::initBuffer() {
 
   int max_socket_tasks = n_data_socks * N_HOST_MEM_SLOTS;
   for (int i = 0; i < max_socket_tasks; ++i) {
-    completed_tasks.push(new SocketTask());
+    SocketTask* task = new SocketTask();
+    memset(task, 0, sizeof(SocketTask));
+    completed_tasks.push(task);
   }
 
 }
@@ -78,7 +81,9 @@ void NetConnection::persistentSocketThread(NetConnection* conn, int tid, SocketT
         task = task_queue->tasks.front();
         task_queue->tasks.pop();
       }
-      LOG_IF_ERROR(task->stage != 0, "using a socket task stage != 0");
+
+      LOG_IF_ERROR(task->stage != 1, "using a socket task stage %d", task->stage);
+
       if (task->is_send) {
         ret = ::send(task->fd, task->ptr, task->size, MSG_WAITALL);
         LOG_IF_ERROR(ret != task->size, "send socket task failed");
@@ -89,6 +94,7 @@ void NetConnection::persistentSocketThread(NetConnection* conn, int tid, SocketT
 
       task->stage = 2;
       task_queue->completion_count++;
+      task = nullptr;
     }
   }
 }
@@ -171,6 +177,7 @@ SocketRequest* NetConnection::launchSocketRequest(void* ptr, int size) {
     // if there is no more completed tasks for allcation, then return all tasks back and return null;
     if (completed_tasks.empty()) {
       for (SocketTask* u : allocated_tasks) {
+        u->stage = 0;
         completed_tasks.push(u);
       }
       return nullptr; // not able to launch tasks for now
@@ -184,6 +191,7 @@ SocketRequest* NetConnection::launchSocketRequest(void* ptr, int size) {
     allocated_tasks.push_back(t);
 
     LOG_IF_ERROR(t->stage != 0, "using a task slot that is not in stage 0");
+
     t->fd = data_fds[i];
     t->is_send = this->is_send;
     t->offset = 0;
@@ -200,9 +208,10 @@ SocketRequest* NetConnection::launchSocketRequest(void* ptr, int size) {
   req->size = size;
   req->stage = 1;
 
-  for (SocketTask* t : req->sub_tasks) {
-    std::lock_guard<std::mutex> lk(sock_task_queues[i]->q_lock);
-    sock_task_queues[i]->tasks.push(t);
+  for (int j = 0; j < i; ++j) {
+    SocketTaskQueue* q = sock_task_queues[j];
+    std::lock_guard<std::mutex> lk(q->q_lock);
+    q->tasks.push(req->sub_tasks[j]);
   }
 
   return req;
@@ -231,8 +240,10 @@ void NetConnection::resetRequest(SocketRequest* req) {
     t->stage = 0;
     // because this func is sequentially after launchSocketRequest, no lock required
     completed_tasks.push(t);
+    // LOG_DEBUG("completed tasks %lu", completed_tasks.size());
   }
   req->stage = 0;
+  req->sub_tasks.clear();
   completed_requests.push(req);
 }
 
@@ -268,6 +279,10 @@ void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
       SocketRequest* req = launchSocketRequest(ctrl_buff->ptr_fifo[next_req_slot], real_size);
 
       if (req != nullptr) {
+        LOG_DEBUG("launch req [%s], tail_last %lu, tail %lu, head %lu, size %d, nsub %d",
+                  is_send ? "send" : "recv", tail_last_seen, ctrl_buff->tail,
+                  ctrl_buff->head, real_size, req->n_sub);
+
         next_req_slot = (next_req_slot + 1) % N_HOST_MEM_SLOTS;
         tail_last_seen++;
         ongoing_requests.push(req);
@@ -275,9 +290,14 @@ void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
     }
 
     if (!ongoing_requests.empty()) {
-      if (isRequestDone(ongoing_requests.front())){
+      SocketRequest* req = ongoing_requests.front();
+      if (isRequestDone(req)){
         ctrl_buff->size_fifo[slot_idx] = 0;
         ctrl_buff->head++;
+        LOG_DEBUG("comp [%s] req, size %d, tail %lu, head %lu",
+                  is_send ? "send" : "recv", req->size, ctrl_buff->tail,
+                  ctrl_buff->head);
+
         offset += ongoing_requests.front()->size;
         slot_idx = (slot_idx + 1) % N_HOST_MEM_SLOTS;
 
@@ -288,6 +308,13 @@ void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
 
   }
   CUDACHECK(cudaEventSynchronize(sync_event));
+
+  LOG_DEBUG("[send] end, tail %lu, head %lu", ctrl_buff->tail, ctrl_buff->head);
+  LOG_IF_ERROR(!ongoing_requests.empty(), "ongoing tasks not empty");
+  LOG_IF_ERROR(completed_tasks.size() != n_data_socks * N_HOST_MEM_SLOTS,
+               "completed_tasks num %lu / %d", completed_tasks.size(),
+               n_data_socks * N_HOST_MEM_SLOTS);
+
   resetCtrlStatus(ctrl_buff);
 }
 
@@ -328,6 +355,12 @@ void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
       SocketRequest* req = launchSocketRequest(ctrl_buff->ptr_fifo[next_req_slot], real_size);
 
       if (req != nullptr) {
+        LOG_DEBUG(
+            "launch req [%s], tail_local %d, tail %lu, head %lu, size %d, nsub "
+            "%d",
+            is_send ? "send" : "recv", tail_local, ctrl_buff->tail,
+            ctrl_buff->head, real_size, req->n_sub);
+
         ongoing_requests.push(req);
         next_req_slot = (next_req_slot + 1) % N_HOST_MEM_SLOTS;
         tail_local++;
@@ -336,10 +369,15 @@ void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
     }
 
     if (!ongoing_requests.empty()) {
-      if (isRequestDone(ongoing_requests.front())) {
+      SocketRequest* req = ongoing_requests.front();
+      if (isRequestDone(req)) {
         ctrl_buff->size_fifo[slot_idx] = ongoing_requests.front()->size; // currently not useful
         ctrl_buff->tail++;
         slot_idx = (slot_idx + 1) % N_HOST_MEM_SLOTS;
+
+        LOG_DEBUG("comp [%s] req, size %d, tail %lu, head %lu",
+                  is_send ? "send" : "recv", req->size, ctrl_buff->tail,
+                  ctrl_buff->head);
 
         offset += ongoing_requests.front()->size;
         resetRequest(ongoing_requests.front());
@@ -348,6 +386,13 @@ void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
     }
   }
   CUDACHECK(cudaEventSynchronize(sync_event));
+
+  LOG_DEBUG("[recv] end, tail %lu, head %lu", ctrl_buff->tail, ctrl_buff->head);
+  LOG_IF_ERROR(!ongoing_requests.empty(), "ongoing tasks not empty");
+  LOG_IF_ERROR(completed_tasks.size() != n_data_socks * N_HOST_MEM_SLOTS,
+               "completed_tasks num %lu / %d", completed_tasks.size(),
+               n_data_socks * N_HOST_MEM_SLOTS);
+
   resetCtrlStatus(ctrl_buff);
   
 }
