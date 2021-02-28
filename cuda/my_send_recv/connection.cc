@@ -19,12 +19,21 @@ void NetConnection::initBuffer() {
   allocDevCtrl(&ctrl_buff);
   CUDACHECK(cudaEventCreate(&sync_event));
 
-  task_queue = new SocketTaskQueue[n_data_socks];
-
-  for (int i = 0; i < N_HOST_MEM_SLOTS; ++i) {
-    requests[i].sub_tasks = new SocketTask*[n_data_socks];
-    memset(requests[i].sub_tasks, 0, sizeof(SocketTask*) * n_data_socks);
+  sock_task_queues.reserve(n_data_socks);
+  for (int i = 0; i < n_data_socks; ++i) {
+    sock_task_queues.push_back(new SocketTaskQueue());
   }
+
+  // at most has N_HOST_MEM_SLOTS requests
+  for (int i = 0; i < N_HOST_MEM_SLOTS; ++i) {
+    completed_requests.push(new SocketRequest());
+  }
+
+  int max_socket_tasks = n_data_socks * N_HOST_MEM_SLOTS;
+  for (int i = 0; i < max_socket_tasks; ++i) {
+    completed_tasks.push(new SocketTask());
+  }
+
 }
 
 static inline void sendNetConnectionInfo(int& rank, ConnectionType_t type, int& fd) {
@@ -52,35 +61,34 @@ static inline void buildNetSendDataConns(int* ip, int port, int n, std::vector<i
 }
 
 void NetConnection::launchBackgroundThreads() {
-  for (int i = 0; i < n_threads; ++i) {
+  for (int i = 0; i < n_data_socks; ++i) {
     background_threads.emplace_back(persistentSocketThread, this, i,
-                                    task_queue);
+                                    sock_task_queues[i]);
   }
 }
 
 void NetConnection::persistentSocketThread(NetConnection* conn, int tid, SocketTaskQueue* task_queue) {
-  // TODO: 
-  int n_sock_per_thread = conn->n_data_socks / conn->n_threads;
-  SocketTaskQueue* my_queues = task_queue + tid * n_sock_per_thread;
 
+  SocketTask* task = nullptr;
+  int ret = -1;
   while (!conn->close) {
-    for (int i = 0; i < n_sock_per_thread; ++i) {
-      SocketTaskQueue* sock_queue = my_queues + i;
-      LOG_IF_ERROR(sock_queue == NULL, "SocketTaskQueue is nullptr");
-
-      int task_idx = sock_queue->head % N_HOST_MEM_SLOTS;
-      SocketTask* t = &sock_queue->tasks[task_idx];
-      LOG_IF_ERROR(t == NULL, "SocketTask t is nullptr");
-
-      if (t->stage == 1 && t->offset < t->size) {
-        // progress on this task
-        bool res = socketProgressOpt(t->is_send, t->fd, t->ptr, t->size, &t->offset, 0);
-        LOG_IF_ERROR(!res, "socket progress failed");
-
-        if (t->offset == t->size) {
-          sock_queue->head++;  // consumer move, move to next task.
-        }
+    if (!task_queue->tasks.empty()) {
+      {
+        std::lock_guard<std::mutex> lk(task_queue->q_lock);
+        task = task_queue->tasks.front();
+        task_queue->tasks.pop();
       }
+      LOG_IF_ERROR(task->stage != 0, "using a socket task stage != 0");
+      if (task->is_send) {
+        ret = ::send(task->fd, task->ptr, task->size, MSG_WAITALL);
+        LOG_IF_ERROR(ret != task->size, "send socket task failed");
+      } else {
+        ret = ::recv(task->fd, task->ptr, task->size, MSG_WAITALL);
+        LOG_IF_ERROR(ret != task->size, "recv socket task failed");
+      }
+
+      task->stage = 2;
+      task_queue->completion_count++;
     }
   }
 }
@@ -91,8 +99,7 @@ NetConnection::NetConnection(NetSendConnArgs& args,
     : n_cuda_threads(n_cuda_threads),
       is_send(true),
       dev_idx(dev_idx),
-      n_data_socks(args.n_socks),
-      n_threads(args.n_threads) {
+      n_data_socks(args.n_socks) {
   initBuffer();
   ctrl_fd = createSocketClient(args.peer_ip, args.peer_port, true);
   sendNetConnectionInfo(args.self_rank, Net, ctrl_fd);
@@ -126,8 +133,7 @@ NetConnection::NetConnection(NetRecvConnArgs& args,
     : n_cuda_threads(n_cuda_threads),
       is_send(false),
       dev_idx(dev_idx),
-      n_data_socks(args.n_socks),
-      n_threads(args.n_threads) {
+      n_data_socks(args.n_socks) {
   initBuffer();
   LOG_DEBUG("Net connection (recv) build buffer initialized");
   ctrl_fd = args.ctrl_fd;
@@ -146,18 +152,26 @@ void resetCtrlStatus(hostDevShmInfo* ctrl_buff) {
   memset(ctrl_buff->size_fifo, 0, sizeof(ctrl_buff->size_fifo));
 }
 
-void NetConnection::launchSocketRequest(int idx, void* ptr, int size) {
-  if (requests[idx].stage != 0) {
-    LOG_ERROR("launch socket request failed, there is ongoing request at slot %d", idx);
-    return;
-  }
+SocketRequest* NetConnection::launchSocketRequest(void* ptr, int size) {
+  if (completed_requests.empty()) return nullptr;
+
+  SocketRequest* req = completed_requests.front();
+  completed_requests.pop();
+  LOG_IF_ERROR(req->stage != 0, "request is not reset to stage 0");
+
   int chunk_offset = 0, i = 0;
   int sub_size = std::max(SOCK_MIN_SIZE, DIVUP(size, n_data_socks));
+
   while (chunk_offset < size) {
     int real_size = std::min(sub_size, size - chunk_offset);
-    SocketTaskQueue* q = task_queue + i; // get the task queue for data_fds[i]
-    int task_idx = q->tail % N_HOST_MEM_SLOTS;
-    SocketTask* t = &q->tasks[task_idx];
+    SocketTask* t;
+    if (completed_tasks.empty()) return nullptr; // not able to launch tasks for now
+
+    {
+      std::lock_guard<std::mutex> lk(this->completed_task_mtx);
+      t = completed_tasks.front();
+      completed_tasks.pop();
+    }
 
     LOG_IF_ERROR(t->stage != 0, "using a task slot that is not in stage 0");
     t->fd = data_fds[i];
@@ -168,58 +182,65 @@ void NetConnection::launchSocketRequest(int idx, void* ptr, int size) {
     t->stage = 1;
 
     chunk_offset += real_size;
-    requests[idx].sub_tasks[i] = t;
+    req->sub_tasks.push_back(t);
+
     i++;
-    q->tail++;
   }
-  requests[idx].n_sub = i;
-  requests[idx].size = size;
-  requests[idx].slot_idx = idx;
-  requests[idx].stage = 1;
-  LOG_DEBUG("launched socket requst: nsub %d, size %d, slot_idx %d, op %s", i,
-            size, idx, is_send ? "send" : "recv");
+  req->n_sub = i;
+  req->size = size;
+  req->stage = 1;
+
+  for (SocketTask* t : req->sub_tasks) {
+    std::lock_guard<std::mutex> lk(sock_task_queues[i]->q_lock);
+    sock_task_queues[i]->tasks.push(t);
+  }
+
+  return req;
 }
 
-bool NetConnection::isRequestDone(int idx) {
-  if(requests[idx].stage == 0) return false;
-  if (requests[idx].stage == 1) {
-    int n_comp = 0;
-    for (int i = 0; i < requests[idx].n_sub; ++i) {
-      SocketTask* sub_t = requests[idx].sub_tasks[i];
-      // LOG_DEBUG("sub_t %p, idx %d, i %d, n_sub %d", (void*)sub_t, idx, i, requests[idx].n_sub);
-      if (sub_t->offset == sub_t->size) n_comp++;
-    }
-    if (n_comp == requests[idx].n_sub) return true;
+bool NetConnection::isRequestDone(SocketRequest* req) {
+  if (req->stage == 0) {
+    LOG_ERROR("checking on a request has stage 0");
+    return false;
   }
+
+  int n_comp = 0;
+  for (int i = 0; i < req->n_sub; ++i) {
+    if (req->sub_tasks[i]->stage == 2)
+      n_comp++;
+  }
+  if (n_comp == req->n_sub)
+    return true;
+
   return false;
 }
 
-int NetConnection::executeWait(void* ptr, int nbytes, bool is_send) {
-  // find a empty request slot
-  int req_slot_idx = -1;
-  for (int i = 0; i < N_HOST_MEM_SLOTS; ++i) {
-    if (requests[i].stage == 0) {
-      req_slot_idx = i;
-      break;
-    }
-  }
-  if (req_slot_idx == -1) {
-    LOG_ERROR("cannot find empty socket request slot, return -1");
-    return -1;
-  }
+// int NetConnection::executeWait(void* ptr, int nbytes, bool is_send) {
+//   // find a empty request slot
+//   int req_slot_idx = -1;
+//   for (int i = 0; i < N_HOST_MEM_SLOTS; ++i) {
+//     if (requests[i].stage == 0) {
+//       req_slot_idx = i;
+//       break;
+//     }
+//   }
+//   if (req_slot_idx == -1) {
+//     LOG_ERROR("cannot find empty socket request slot, return -1");
+//     return -1;
+//   }
 
-  launchSocketRequest(req_slot_idx, ptr, nbytes);
-  while (!isRequestDone(req_slot_idx)) {
-    std::this_thread::sleep_for(std::chrono::microseconds(100));
-  }
+//   launchSocketRequest(req_slot_idx, ptr, nbytes);
+//   while (!isRequestDone(req_slot_idx)) {
+//     std::this_thread::sleep_for(std::chrono::microseconds(100));
+//   }
 
-  // clear status
-  requests[req_slot_idx].stage = 0;
-  for (int i = 0; i < requests[req_slot_idx].n_sub; ++i) {
-    requests[req_slot_idx].sub_tasks[i]->stage = 0;
-  }
-  return nbytes;
-}
+//   // clear status
+//   requests[req_slot_idx].stage = 0;
+//   for (int i = 0; i < requests[req_slot_idx].n_sub; ++i) {
+//     requests[req_slot_idx].sub_tasks[i]->stage = 0;
+//   }
+//   return nbytes;
+// }
 
 void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
   // TODO: 
@@ -235,8 +256,8 @@ void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
 
   // launch kernel
   void* kernel_args[3] = {&buff, &ctrl_buff, &count};
-  CUDACHECK(cudaLaunchKernel((void*)netSendKernel, dim3(1), dim3(n_cuda_threads), kernel_args, 0, NULL));
-  CUDACHECK(cudaEventRecord(sync_event, NULL));
+  CUDACHECK(cudaLaunchKernel((void*)netSendKernel, dim3(1), dim3(n_cuda_threads), kernel_args, 0, stream));
+  CUDACHECK(cudaEventRecord(sync_event, stream));
 
   // init variables
   size_t offset = 0;
@@ -261,12 +282,6 @@ void NetConnection::send(void* buff, size_t count, cudaStream_t stream) {
   }
   CUDACHECK(cudaEventSynchronize(sync_event));
   resetCtrlStatus(ctrl_buff);
-  // reset socketTasks
-  for (int i = 0; i < n_data_socks; ++i) {
-    task_queue[i].head = 0;
-    task_queue[i].tail = 0;
-    memset(task_queue[i].tasks, 0, sizeof(SocketTask) * N_HOST_MEM_SLOTS);
-  }
 
 }
 
@@ -322,12 +337,12 @@ void NetConnection::recv(void* buff, size_t count, cudaStream_t stream) {
   }
   CUDACHECK(cudaEventSynchronize(sync_event));
   resetCtrlStatus(ctrl_buff);
-  // reset socketTasks
-  for (int i = 0; i < n_data_socks; ++i) {
-    task_queue[i].head = 0;
-    task_queue[i].tail = 0;
-    memset(task_queue[i].tasks, 0, sizeof(SocketTask) * N_HOST_MEM_SLOTS);
-  }
+  // // reset socketTasks
+  // for (int i = 0; i < n_data_socks; ++i) {
+  //   task_queue[i].head = 0;
+  //   task_queue[i].tail = 0;
+  //   memset(task_queue[i].tasks, 0, sizeof(SocketTask) * N_HOST_MEM_SLOTS);
+  // }
   
 }
 
@@ -338,12 +353,21 @@ NetConnection::~NetConnection() {
     if (t.joinable()) t.join();
   }
 
-  for (int i = 0; i < N_HOST_MEM_SLOTS; ++i) {
-    delete[] requests[i].sub_tasks;
+  while (!completed_requests.empty()) {
+    delete completed_requests.front();
+    completed_requests.pop();
+  }
+
+  while (!completed_tasks.empty()) {
+    delete completed_tasks.front();
+    completed_tasks.pop();
+  }
+
+  for (int i = 0; i < n_data_socks; ++i) {
+    delete sock_task_queues[i];
   }
 
   freeDevCtrl(ctrl_buff);
-  delete[] task_queue;
 }
 
 P2PConnection::P2PConnection(P2PSendArgs& args) {
