@@ -127,7 +127,7 @@ void ipStrToInts(std::string& ip, int* ret) {
 }
 
 #define N_DATA_SOCK 16
-#define SOCK_REQ_SIZE (4*1024 * 1024) // 512kB or 1MB
+#define SOCK_REQ_SIZE (48*1024 * 1024) // 512kB or 1MB
 #define SOCK_TASK_SIZE (128 * 1024) // 64kB
 // #define N_SOCK_REQ 4 // 4 slots 
 #define MAX_TASKS (2 * 1024) // for test only
@@ -269,7 +269,7 @@ void serverMode(int port) {
       tasks[k].stage = 0;
     }
 
-    LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL) != sizeof(ccc), "recv ccc confirm failed");
+    // LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL) != sizeof(ccc), "recv ccc confirm failed");
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
 
@@ -290,12 +290,16 @@ void recvThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
   void* tmp_buff = malloc(SOCK_TASK_SIZE);
 
   while (!exit) {
+    double s = timeMs();
     LOG_IF_ERROR(::recv(fd, &ctrl_msg, sizeof(ctrl_msg), MSG_WAITALL) !=
                       sizeof(ctrl_msg),
                   "receive control msg failed");
     if (ctrl_msg.exit == 1) {LOG_DEBUG("recv fd %d, recv count %d", fd, recv_count); return;}
 
     int ret = ::recv(fd, tmp_buff, SOCK_TASK_SIZE, MSG_WAITALL);
+    double e = timeMs();
+    LOG_DEBUG("recv fd %d, bw %f Gbps", fd, SOCK_TASK_SIZE * 8 / (e - s) / 1e6);
+
     LOG_IF_ERROR(ret != SOCK_TASK_SIZE, "error while recv data, ret %d", ret);
     {
       std::lock_guard<std::mutex> lk(completion_mtx);
@@ -406,12 +410,19 @@ void clientMode(std::string& remote_ip, int remote_port) {
     double m1 = timeMs();
 
     // wait for completion
-    int n_complete = 0;
-    auto found = completion_table.find(i);
+    auto found = completion_table.end();
     while (found == completion_table.end()) {
+      std::this_thread::yield();
+      std::lock_guard<std::mutex> lk(completion_mtx);
       found = completion_table.find(i);
     }
-    while (completion_table[i] != n_tasks) {}
+
+    int n_complete = 0;
+    while (n_complete != n_tasks) {
+      std::this_thread::yield();
+      std::lock_guard<std::mutex> lk(completion_mtx);
+      n_complete = completion_table[i];
+    }
 
     double e = timeMs();
 
@@ -429,7 +440,7 @@ void clientMode(std::string& remote_ip, int remote_port) {
       tasks[k].stage = 0;
     }
     // memset(buffer, 0, SOCK_REQ_SIZE);
-    LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail send ctrl msg confirmation");
+    // LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail send ctrl msg confirmation");
     
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
