@@ -293,6 +293,8 @@ void recvThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
     LOG_IF_ERROR(::recv(fd, &ctrl_msg, sizeof(ctrl_msg), MSG_WAITALL) !=
                       sizeof(ctrl_msg),
                   "receive control msg failed");
+    if (ctrl_msg.exit == 1) {LOG_DEBUG("recv fd %d, recv count %d", fd, recv_count); return;}
+
     int ret = ::recv(fd, tmp_buff, SOCK_TASK_SIZE, MSG_WAITALL);
     LOG_IF_ERROR(ret != SOCK_TASK_SIZE, "error while recv data, ret %d", ret);
     {
@@ -414,17 +416,19 @@ void clientMode(std::string& remote_ip, int remote_port) {
     double e = timeMs();
 
     // int match = memcmp(send_buff, buffer, SOCK_REQ_SIZE);
-    double recv_sum = floatSummary((float*)buffer, SOCK_REQ_SIZE / sizeof(float));
+    // double recv_sum = floatSummary((float*)buffer, SOCK_REQ_SIZE / sizeof(float));
     // LOG_INFO("recv, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms, integrity %s, recv_sum %f, send_sum %f", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6,
     //          SOCK_REQ_SIZE, (e -s), (m1 - s), match == 0 ? "true":"false", recv_sum, floatSummary((float*)send_buff, SOCK_REQ_SIZE / sizeof(float)));
 
-    LOG_INFO("recv, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms, recv_sum %f", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6,
-             SOCK_REQ_SIZE, (e -s), (m1 - s), recv_sum);
+    // LOG_INFO("recv, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms, recv_sum %f", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6,
+    //          SOCK_REQ_SIZE, (e -s), (m1 - s), recv_sum);
+    LOG_INFO("recv, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6,
+             SOCK_REQ_SIZE, (e -s), (m1 - s));
 
     for (int k = 0; k < n_tasks; ++k) {
       tasks[k].stage = 0;
     }
-    memset(buffer, 0, SOCK_REQ_SIZE);
+    // memset(buffer, 0, SOCK_REQ_SIZE);
     LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail send ctrl msg confirmation");
     
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
