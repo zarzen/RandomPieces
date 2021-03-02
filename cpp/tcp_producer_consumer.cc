@@ -215,7 +215,7 @@ void serverMode(int port) {
     }
 
     double e = timeMs();
-    LOG_INFO("bw %f Gbps, size %d, time %f ms, launch cost %f ms", SOCK_REQ_SIZE / (e - s) / 1e6, SOCK_REQ_SIZE, (e-s), (m1 - s));
+    LOG_INFO("exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6, SOCK_REQ_SIZE, (e-s), (m1 - s));
   }
 
   exit = true;
@@ -317,7 +317,7 @@ void clientMode(std::string& remote_ip, int remote_port) {
     }
 
     double e = timeMs();
-    LOG_INFO("exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms", i, SOCK_REQ_SIZE / (e - s) / 1e6,
+    LOG_INFO("exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6,
              SOCK_REQ_SIZE, (e -s), (m1 - s));
   }
 
