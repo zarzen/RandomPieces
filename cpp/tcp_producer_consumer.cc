@@ -180,6 +180,7 @@ void serverMode(int port) {
     int fd = socketAccept(listen_fd, true);
     data_fds.push_back(fd);
   }
+  LOG_DEBUG("serv build data links at port %d", port);
 
   // experiments send message to client in producer consumer 
   SocketTask tasks[MAX_TASKS];
@@ -200,7 +201,7 @@ void serverMode(int port) {
   FakeControlData ccc;
   for (int i = 0; i < N_EXP; ++i) {
     LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), 0) != sizeof(ccc), "send control msg failed");
-
+    LOG_DEBUG("send ccc");
     double s = timeMs();
     // launch tasks int to queue
     {
@@ -297,6 +298,7 @@ void clientMode(std::string& remote_ip, int remote_port) {
     int fd = createSocketClient(ip, remote_port, true);
     data_fds.push_back(fd);
   }
+  LOG_DEBUG("cli built data links to %s:%d", remote_ip.c_str(), remote_port);
 
   SocketTask tasks[MAX_TASKS];
   std::queue<SocketTask*> task_queue;
@@ -317,7 +319,7 @@ void clientMode(std::string& remote_ip, int remote_port) {
   FakeControlData ccc;
   for (int i = 0; i < N_EXP; ++i) {
     LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail recv ctrl msg");
-
+    LOG_DEBUG("recved ccc");
     double s = timeMs();
     // launch tasks int to queue
     {
