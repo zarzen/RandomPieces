@@ -317,6 +317,11 @@ void clientMode(std::string& remote_ip, int remote_port) {
     LOG_INFO("exp %d, bw %f Gbps, size %d", i, SOCK_REQ_SIZE / (e - s) / 1e6,
              SOCK_REQ_SIZE);
   }
+
+  exit = true;
+  for (auto& t : background_threads) {
+    t.join();
+  }
 }
 
 
