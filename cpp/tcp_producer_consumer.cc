@@ -127,7 +127,7 @@ void ipStrToInts(std::string& ip, int* ret) {
 }
 
 #define N_DATA_SOCK 16
-#define SOCK_REQ_SIZE (48*1024 * 1024) // 512kB or 1MB
+#define SOCK_REQ_SIZE (8*1024 * 1024) // 512kB or 1MB
 #define SOCK_TASK_SIZE (128 * 1024) // 64kB
 // #define N_SOCK_REQ 4 // 4 slots 
 #define MAX_TASKS (2 * 1024) // for test only
@@ -270,7 +270,7 @@ void serverMode(int port) {
     }
 
     // LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL) != sizeof(ccc), "recv ccc confirm failed");
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
 
   exit = true;
@@ -297,8 +297,8 @@ void recvThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
     if (ctrl_msg.exit == 1) {LOG_DEBUG("recv fd %d, recv count %d", fd, recv_count); return;}
 
     int ret = ::recv(fd, tmp_buff, SOCK_TASK_SIZE, MSG_WAITALL);
-    double e = timeMs();
-    LOG_DEBUG("recv fd %d, bw %f Gbps", fd, SOCK_TASK_SIZE * 8 / (e - s) / 1e6);
+    // double e = timeMs();
+    // LOG_DEBUG("recv fd %d, bw %f Gbps", fd, SOCK_TASK_SIZE * 8 / (e - s) / 1e6);
 
     LOG_IF_ERROR(ret != SOCK_TASK_SIZE, "error while recv data, ret %d", ret);
     {
@@ -408,6 +408,7 @@ void clientMode(std::string& remote_ip, int remote_port) {
       }
     }
     double m1 = timeMs();
+    LOG_DEBUG("launched recv tasks, exp %d", i);
 
     // wait for completion
     auto found = completion_table.end();
@@ -442,7 +443,7 @@ void clientMode(std::string& remote_ip, int remote_port) {
     // memset(buffer, 0, SOCK_REQ_SIZE);
     // LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail send ctrl msg confirmation");
     
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
 
   exit = true;
