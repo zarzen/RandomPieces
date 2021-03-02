@@ -107,7 +107,7 @@ void ipStrToInts(std::string& ip, int* ret) {
 }
 
 #define N_DATA_SOCK 16
-#define SOCK_REQ_SIZE (4*1024 * 1024) // 512kB or 1MB
+#define SOCK_REQ_SIZE (1*1024 * 1024) // 512kB or 1MB
 #define SOCK_TASK_SIZE (64 * 1024) // 64kB
 // #define N_SOCK_REQ 4 // 4 slots 
 #define MAX_TASKS (2 * 1024) // for test only
@@ -143,13 +143,17 @@ void sendThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
         LOG_IF_ERROR(
             ::send(fd, &ctrl_msg, sizeof(ctrl_msg), 0) != sizeof(ctrl_msg),
             "send ctrl msg error");
-        // 
+
+        double s = timeMs();
         int ret = ::send(fd, task->ptr, task->size, 0);
         LOG_IF_ERROR(ret != task->size, "send data failed");
 
         task->stage = 2;
-  
+        double e = timeMs();
+        // LOG_DEBUG("fd %d, size %d, bw %f Gbps", fd, task->size, task->size * 8 / (e - s) / 1e6);
+
         task = nullptr;
+        
       }
     }
   }
@@ -188,7 +192,7 @@ void serverMode(int port) {
                                     std::ref(task_queue), std::ref(task_mtx),
                                     std::ref(exit));
   }
-  
+  LOG_DEBUG("ntask %d, timestamp %f", n_tasks, timeMs());
   for (int i = 0; i < N_EXP; ++i) {
     double s = timeMs();
     // launch tasks int to queue
@@ -209,13 +213,19 @@ void serverMode(int port) {
     int n_complete = 0;
     while (n_complete != n_tasks){
       n_complete = 0;
+      // double x = timeMs();
       for (int i = 0; i < n_tasks; ++i) {
         if (tasks[i].stage == 2) n_complete++;
       }
+      // LOG_DEBUG("check cost %f ms, n_complete %d", timeMs() - x, n_complete);
     }
 
     double e = timeMs();
     LOG_INFO("exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6, SOCK_REQ_SIZE, (e-s), (m1 - s));
+
+    for (int i = 0; i < n_tasks; ++i) {
+      tasks[i].stage = 0;
+    }
   }
 
   exit = true;
@@ -319,6 +329,10 @@ void clientMode(std::string& remote_ip, int remote_port) {
     double e = timeMs();
     LOG_INFO("exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6,
              SOCK_REQ_SIZE, (e -s), (m1 - s));
+
+    for (int i = 0; i < n_tasks; ++i) {
+      tasks[i].stage = 0;
+    }
   }
 
   exit = true;
