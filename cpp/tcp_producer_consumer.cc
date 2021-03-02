@@ -119,6 +119,7 @@ struct SocketTask {
 };
 
 struct FakeControlData {
+  int exit;
   char pad[16];
 };
 
@@ -152,6 +153,9 @@ void sendThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
       }
     }
   }
+  ctrl_msg.exit = 1;
+  LOG_IF_ERROR(::send(fd, &ctrl_msg, sizeof(ctrl_msg), 0) != sizeof(ctrl_msg),
+               "send ctrl msg error");
 }
 
 #define N_EXP 10
@@ -231,6 +235,7 @@ void recvThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
                    "receive control msg failed");
       control_received = true;
     }
+    if (ctrl_msg.exit == 1) return;
 
     while(task_queue.empty()) {
       std::this_thread::yield();
@@ -309,7 +314,7 @@ void clientMode(std::string& remote_ip, int remote_port) {
     }
 
     double e = timeMs();
-    LOG_INFO("bw %f Gbps, size %d", SOCK_REQ_SIZE / (e - s) / 1e6,
+    LOG_INFO("exp %d, bw %f Gbps, size %d", i, SOCK_REQ_SIZE / (e - s) / 1e6,
              SOCK_REQ_SIZE);
   }
 }
