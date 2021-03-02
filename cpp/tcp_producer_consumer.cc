@@ -107,7 +107,7 @@ void ipStrToInts(std::string& ip, int* ret) {
 }
 
 #define N_DATA_SOCK 16
-#define SOCK_REQ_SIZE (1*1024 * 1024) // 512kB or 1MB
+#define SOCK_REQ_SIZE (2*1024 * 1024) // 512kB or 1MB
 #define SOCK_TASK_SIZE (64 * 1024) // 64kB
 // #define N_SOCK_REQ 4 // 4 slots 
 #define MAX_TASKS (2 * 1024) // for test only
@@ -197,7 +197,10 @@ void serverMode(int port) {
                                     std::ref(exit));
   }
   LOG_DEBUG("ntask %d, timestamp %f", n_tasks, timeMs());
+  FakeControlData ccc;
   for (int i = 0; i < N_EXP; ++i) {
+    LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), 0) != sizeof(ccc), "send control msg failed");
+
     double s = timeMs();
     // launch tasks int to queue
     {
@@ -225,11 +228,13 @@ void serverMode(int port) {
     }
 
     double e = timeMs();
-    LOG_INFO("exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6, SOCK_REQ_SIZE, (e-s), (m1 - s));
+    LOG_INFO("send, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6, SOCK_REQ_SIZE, (e-s), (m1 - s));
 
     for (int i = 0; i < n_tasks; ++i) {
       tasks[i].stage = 0;
     }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 
   exit = true;
@@ -242,7 +247,7 @@ void recvThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
   SocketTask* task;
   FakeControlData ctrl_msg;
   bool control_received = false;
-  FakeControlData ctrl2;
+  int ctrl2;
 
   while (!exit) {
     if (!control_received) {
@@ -272,7 +277,7 @@ void recvThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
       int ret = ::recv(fd, task->ptr, task->size, MSG_WAITALL);
       LOG_IF_ERROR(ret != task->size, "error while recv data, ret %d", ret);
 
-      LOG_IF_ERROR(::send(fd, &ctrl2, sizeof(ctrl2), MSG_WAITALL) != sizeof(ctrl2), "fail sending confirmation");
+      // LOG_IF_ERROR(::send(fd, &ctrl2, sizeof(ctrl2), MSG_WAITALL) != sizeof(ctrl2), "fail sending confirmation");
 
       task->stage = 2;
       task = nullptr;
@@ -309,7 +314,10 @@ void clientMode(std::string& remote_ip, int remote_port) {
   }
 
   // experiments
+  FakeControlData ccc;
   for (int i = 0; i < N_EXP; ++i) {
+    LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail recv ctrl msg");
+
     double s = timeMs();
     // launch tasks int to queue
     {
@@ -335,12 +343,14 @@ void clientMode(std::string& remote_ip, int remote_port) {
     }
 
     double e = timeMs();
-    LOG_INFO("exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6,
+    LOG_INFO("recv, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6,
              SOCK_REQ_SIZE, (e -s), (m1 - s));
 
     for (int i = 0; i < n_tasks; ++i) {
       tasks[i].stage = 0;
     }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 
   exit = true;
@@ -358,10 +368,17 @@ int main(int argc, char* argv[]) {
   std::string remote_ip = std::string(argv[2]);
   int port = std::stoi(argv[3]);
 
-  if (mode > 0) {
-    // listen server 
-    serverMode(port);
-  } else {
-    clientMode(remote_ip, port);
-  }
+  std::thread server(serverMode, port);
+  std::this_thread::sleep_for(std::chrono::seconds(3));
+  std::thread client(clientMode, std::ref(remote_ip), port);
+
+  server.join();
+  client.join();
+  
+  // if (mode > 0) {
+  //   // listen server 
+  //   serverMode(port);
+  // } else {
+  //   clientMode(remote_ip, port);
+  // }
 }
