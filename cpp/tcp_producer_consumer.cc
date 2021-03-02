@@ -263,7 +263,8 @@ void serverMode(int port) {
       tasks[k].stage = 0;
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL) != sizeof(ccc), "recv ccc confirm failed");
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
   }
 
   exit = true;
@@ -278,6 +279,7 @@ void recvThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
   bool control_received = false;
   int ctrl2;
   int recv_count = 0;
+
   while (!exit) {
     if (!control_received) {
       // recv ctrl msg
@@ -385,18 +387,20 @@ void clientMode(std::string& remote_ip, int remote_port) {
     double e = timeMs();
 
     // int match = memcmp(send_buff, buffer, SOCK_REQ_SIZE);
-    // double recv_sum = floatSummary((float*)buffer, SOCK_REQ_SIZE / sizeof(float));
+    double recv_sum = floatSummary((float*)buffer, SOCK_REQ_SIZE / sizeof(float));
     // LOG_INFO("recv, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms, integrity %s, recv_sum %f, send_sum %f", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6,
     //          SOCK_REQ_SIZE, (e -s), (m1 - s), match == 0 ? "true":"false", recv_sum, floatSummary((float*)send_buff, SOCK_REQ_SIZE / sizeof(float)));
 
-    LOG_INFO("recv, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6,
-             SOCK_REQ_SIZE, (e -s), (m1 - s));
+    LOG_INFO("recv, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms, recv_sum %f", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6,
+             SOCK_REQ_SIZE, (e -s), (m1 - s), recv_sum);
 
     for (int k = 0; k < n_tasks; ++k) {
       tasks[k].stage = 0;
     }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    memset(buffer, 0, SOCK_REQ_SIZE);
+    LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail send ctrl msg confirmation");
+    
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
   }
 
   exit = true;
