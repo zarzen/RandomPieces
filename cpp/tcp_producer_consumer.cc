@@ -106,7 +106,7 @@ void ipStrToInts(std::string& ip, int* ret) {
   }
 }
 
-#define N_DATA_SOCK 16
+#define N_DATA_SOCK 8
 #define SOCK_REQ_SIZE (2*1024 * 1024) // 512kB or 1MB
 #define SOCK_TASK_SIZE (64 * 1024) // 64kB
 // #define N_SOCK_REQ 4 // 4 slots 
@@ -222,8 +222,8 @@ void serverMode(int port) {
     while (n_complete != n_tasks){
       n_complete = 0;
       // double x = timeMs();
-      for (int i = 0; i < n_tasks; ++i) {
-        if (tasks[i].stage == 2) n_complete++;
+      for (int k = 0; k < n_tasks; ++k) {
+        if (tasks[k].stage == 2) n_complete++;
       }
       // LOG_DEBUG("check cost %f ms, n_complete %d", timeMs() - x, n_complete);
     }
@@ -231,8 +231,8 @@ void serverMode(int port) {
     double e = timeMs();
     LOG_INFO("send, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6, SOCK_REQ_SIZE, (e-s), (m1 - s));
 
-    for (int i = 0; i < n_tasks; ++i) {
-      tasks[i].stage = 0;
+    for (int k = 0; k < n_tasks; ++k) {
+      tasks[k].stage = 0;
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -338,8 +338,8 @@ void clientMode(std::string& remote_ip, int remote_port) {
     int n_complete = 0;
     while (n_complete != n_tasks) {
       n_complete = 0;
-      for (int i = 0; i < n_tasks; ++i) {
-        if (tasks[i].stage == 2)
+      for (int k = 0; k < n_tasks; ++k) {
+        if (tasks[k].stage == 2)
           n_complete++;
       }
     }
@@ -348,8 +348,8 @@ void clientMode(std::string& remote_ip, int remote_port) {
     LOG_INFO("recv, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6,
              SOCK_REQ_SIZE, (e -s), (m1 - s));
 
-    for (int i = 0; i < n_tasks; ++i) {
-      tasks[i].stage = 0;
+    for (int k = 0; k < n_tasks; ++k) {
+      tasks[k].stage = 0;
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
