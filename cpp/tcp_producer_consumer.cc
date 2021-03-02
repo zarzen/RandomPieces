@@ -129,6 +129,8 @@ void sendThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
   SocketTask* task = nullptr;
   FakeControlData ctrl_msg;
 
+  FakeControlData ctrl2;
+
   while (!exit) {
     if (!task_queue.empty()) {
       { 
@@ -141,16 +143,18 @@ void sendThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
 
       if (task != nullptr) {
         LOG_IF_ERROR(
-            ::send(fd, &ctrl_msg, sizeof(ctrl_msg), 0) != sizeof(ctrl_msg),
+            ::send(fd, &ctrl_msg, sizeof(ctrl_msg), MSG_WAITALL) != sizeof(ctrl_msg),
             "send ctrl msg error");
 
         double s = timeMs();
-        int ret = ::send(fd, task->ptr, task->size, 0);
+        int ret = ::send(fd, task->ptr, task->size, MSG_WAITALL);
         LOG_IF_ERROR(ret != task->size, "send data failed");
+
+        LOG_IF_ERROR(::recv(fd, &ctrl2, sizeof(ctrl2), MSG_WAITALL) != sizeof(ctrl2), "failed at recv confirmation");
 
         task->stage = 2;
         double e = timeMs();
-        // LOG_DEBUG("fd %d, size %d, bw %f Gbps", fd, task->size, task->size * 8 / (e - s) / 1e6);
+        LOG_DEBUG("fd %d, size %d, bw %f Gbps", fd, task->size, task->size * 8 / (e - s) / 1e6);
 
         task = nullptr;
         
@@ -213,11 +217,11 @@ void serverMode(int port) {
     int n_complete = 0;
     while (n_complete != n_tasks){
       n_complete = 0;
-      // double x = timeMs();
+      double x = timeMs();
       for (int i = 0; i < n_tasks; ++i) {
         if (tasks[i].stage == 2) n_complete++;
       }
-      // LOG_DEBUG("check cost %f ms, n_complete %d", timeMs() - x, n_complete);
+      LOG_DEBUG("check cost %f ms, n_complete %d", timeMs() - x, n_complete);
     }
 
     double e = timeMs();
@@ -238,6 +242,7 @@ void recvThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
   SocketTask* task;
   FakeControlData ctrl_msg;
   bool control_received = false;
+  FakeControlData ctrl2;
 
   while (!exit) {
     if (!control_received) {
@@ -265,6 +270,9 @@ void recvThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
     
     if (task != nullptr) {
       int ret = ::recv(fd, task->ptr, task->size, MSG_WAITALL);
+      LOG_IF_ERROR(ret != task->size, "error while recv data, ret %d", ret);
+
+      LOG_IF_ERROR(::send(fd, &ctrl2, sizeof(ctrl2), MSG_WAITALL) != sizeof(ctrl2), "fail sending confirmation");
 
       task->stage = 2;
       task = nullptr;
