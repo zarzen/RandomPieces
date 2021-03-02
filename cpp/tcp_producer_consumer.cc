@@ -17,6 +17,17 @@ double timeMs() {
          1e6;
 };
 
+template<typename T>
+static inline void fillVals(T* buff, size_t count) {
+  srand(123);
+  for (int i = 0; i < count; ++i) {
+    T e = static_cast<T>(rand()) / static_cast<T>(RAND_MAX);
+    buff[i] = e;
+  }
+}
+
+void* send_buff;
+
 bool createListenSocket(int* fd, int port) {
   int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
   LOG_IF_ERROR(socket_fd == -1, "open socket error");
@@ -107,7 +118,7 @@ void ipStrToInts(std::string& ip, int* ret) {
 }
 
 #define N_DATA_SOCK 8
-#define SOCK_REQ_SIZE (2*1024 * 1024) // 512kB or 1MB
+#define SOCK_REQ_SIZE (1*1024 * 1024) // 512kB or 1MB
 #define SOCK_TASK_SIZE (64 * 1024) // 64kB
 // #define N_SOCK_REQ 4 // 4 slots 
 #define MAX_TASKS (2 * 1024) // for test only
@@ -190,7 +201,8 @@ void serverMode(int port) {
   std::queue<SocketTask*> task_queue;
   std::mutex task_mtx;
 
-  void* buffer = malloc(SOCK_REQ_SIZE);
+  // void* buffer = malloc(SOCK_REQ_SIZE);
+  void* buffer = send_buff;
   int n_tasks = SOCK_REQ_SIZE / SOCK_TASK_SIZE;
 
   std::vector<std::thread> background_threads;
@@ -357,8 +369,9 @@ void clientMode(std::string& remote_ip, int remote_port) {
     }
 
     double e = timeMs();
-    LOG_INFO("recv, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6,
-             SOCK_REQ_SIZE, (e -s), (m1 - s));
+    int match = memcmp(send_buff, buffer, SOCK_REQ_SIZE);
+    LOG_INFO("recv, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms, integrity %s", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6,
+             SOCK_REQ_SIZE, (e -s), (m1 - s), match == 0 ? "true":"false");
 
     for (int k = 0; k < n_tasks; ++k) {
       tasks[k].stage = 0;
@@ -381,6 +394,10 @@ int main(int argc, char* argv[]) {
   int mode = std::stoi(argv[1]);
   std::string remote_ip = std::string(argv[2]);
   int port = std::stoi(argv[3]);
+
+  send_buff = malloc(SOCK_REQ_SIZE);
+  memset(send_buff, 0, SOCK_REQ_SIZE);
+  fillVals<float>((float*)send_buff, SOCK_REQ_SIZE / sizeof(float));
 
   std::thread server(serverMode, port);
   std::this_thread::sleep_for(std::chrono::seconds(3));
