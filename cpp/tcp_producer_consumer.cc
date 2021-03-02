@@ -10,6 +10,7 @@
 #include <mutex>
 #include <chrono>
 #include <thread>
+#include <unordered_map>
 
 
 double timeMs() {
@@ -125,9 +126,9 @@ void ipStrToInts(std::string& ip, int* ret) {
   }
 }
 
-#define N_DATA_SOCK 8
-#define SOCK_REQ_SIZE (1*1024 * 1024) // 512kB or 1MB
-#define SOCK_TASK_SIZE (64 * 1024) // 64kB
+#define N_DATA_SOCK 16
+#define SOCK_REQ_SIZE (4*1024 * 1024) // 512kB or 1MB
+#define SOCK_TASK_SIZE (128 * 1024) // 64kB
 // #define N_SOCK_REQ 4 // 4 slots 
 #define MAX_TASKS (2 * 1024) // for test only
 
@@ -135,11 +136,13 @@ struct SocketTask {
   void* ptr;
   int size;
   int stage;
+  int exp_id;
 };
 
 struct FakeControlData {
+  int exp_id;
   int exit;
-  char pad[16];
+  char pad[8];
 };
 
 
@@ -163,6 +166,7 @@ void sendThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
       }
 
       if (task != nullptr) {
+        ctrl_msg.exp_id = task->exp_id;
         LOG_IF_ERROR(
             ::send(fd, &ctrl_msg, sizeof(ctrl_msg), MSG_WAITALL) != sizeof(ctrl_msg),
             "send ctrl msg error");
@@ -199,7 +203,7 @@ void serverMode(int port) {
 
   std::vector<int> data_fds;
   for (int i = 0; i < N_DATA_SOCK; ++i) {
-    int fd = socketAccept(listen_fd, true);
+    int fd = socketAccept(listen_fd, false);
     data_fds.push_back(fd);
   }
   LOG_DEBUG("serv build data links at port %d", port);
@@ -239,11 +243,13 @@ void serverMode(int port) {
         t->stage = 1;
         t->ptr = (char*)buffer + j * SOCK_TASK_SIZE;
         t->size = SOCK_TASK_SIZE;
+        t->exp_id = i;
         task_queue.push(t);
       }
     }
 
     double m1 = timeMs();
+    LOG_DEBUG("launched send tasks %d", i);
 
     // wait for completion
     int n_complete = 0;
@@ -264,7 +270,7 @@ void serverMode(int port) {
     }
 
     LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL) != sizeof(ccc), "recv ccc confirm failed");
-    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
 
   exit = true;
@@ -273,52 +279,70 @@ void serverMode(int port) {
   }
 }
 
-void recvThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bool& exit) {
+void recvThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bool& exit, 
+      std::unordered_map<int, int>& completion_table, std::mutex& completion_mtx) {
+
   SocketTask* task;
   FakeControlData ctrl_msg;
   bool control_received = false;
   int ctrl2;
   int recv_count = 0;
+  void* tmp_buff = malloc(SOCK_TASK_SIZE);
 
   while (!exit) {
-    if (!control_received) {
-      // recv ctrl msg
-      LOG_IF_ERROR(::recv(fd, &ctrl_msg, sizeof(ctrl_msg), MSG_WAITALL) !=
-                       sizeof(ctrl_msg),
-                   "receive control msg failed");
-      control_received = true;
-    }
-    if (ctrl_msg.exit == 1) {LOG_DEBUG("recv fd %d, recv count %d", fd, recv_count); return;}
-
-    while(task_queue.empty()) {
-      std::this_thread::yield();
-    }
-
+    LOG_IF_ERROR(::recv(fd, &ctrl_msg, sizeof(ctrl_msg), MSG_WAITALL) !=
+                      sizeof(ctrl_msg),
+                  "receive control msg failed");
+    int ret = ::recv(fd, tmp_buff, SOCK_TASK_SIZE, MSG_WAITALL);
+    LOG_IF_ERROR(ret != SOCK_TASK_SIZE, "error while recv data, ret %d", ret);
     {
-      std::lock_guard<std::mutex> lk(mtx);
-      if (task_queue.empty()) {
-        task = nullptr;
+      std::lock_guard<std::mutex> lk(completion_mtx);
+      auto found = completion_table.find(ctrl_msg.exp_id);
+      if (found == completion_table.end()) {
+        completion_table[ctrl_msg.exp_id] = 1;
       } else {
-        task = task_queue.front();
-        task_queue.pop();
+        completion_table[ctrl_msg.exp_id] += 1;
       }
     }
+
+    // if (!control_received) {
+    //   // recv ctrl msg
+    //   LOG_IF_ERROR(::recv(fd, &ctrl_msg, sizeof(ctrl_msg), MSG_WAITALL) !=
+    //                    sizeof(ctrl_msg),
+    //                "receive control msg failed");
+    //   control_received = true;
+    // }
+    // if (ctrl_msg.exit == 1) {LOG_DEBUG("recv fd %d, recv count %d", fd, recv_count); return;}
+
+    // while(task_queue.empty()) {
+    //   std::this_thread::yield();
+    // }
+
+    // {
+    //   std::lock_guard<std::mutex> lk(mtx);
+    //   if (task_queue.empty()) {
+    //     task = nullptr;
+    //   } else {
+    //     task = task_queue.front();
+    //     task_queue.pop();
+    //   }
+    // }
     
-    if (task != nullptr) {
-      double s = timeMs();
-      int ret = ::recv(fd, task->ptr, task->size, MSG_WAITALL);
-      LOG_IF_ERROR(ret != task->size, "error while recv data, ret %d", ret);
+    // if (task != nullptr) {
+    //   double s = timeMs();
+    //   int ret = ::recv(fd, task->ptr, task->size, MSG_WAITALL);
+    //   LOG_IF_ERROR(ret != task->size, "error while recv data, ret %d", ret);
 
-      // LOG_IF_ERROR(::send(fd, &ctrl2, sizeof(ctrl2), MSG_WAITALL) != sizeof(ctrl2), "fail sending confirmation");
+    //   // LOG_IF_ERROR(::send(fd, &ctrl2, sizeof(ctrl2), MSG_WAITALL) != sizeof(ctrl2), "fail sending confirmation");
 
-      task->stage = 2;
-      double e = timeMs();
-      // LOG_DEBUG("recv fd %d, bw %f Gbps, ptr %p, size %d", fd, task->size / (e - s) / 1e6, task->ptr, task->size);
-      task = nullptr;
-      control_received = false;
+    //   task->stage = 2;
+    //   double e = timeMs();
+    //   // LOG_DEBUG("recv fd %d, bw %f Gbps, ptr %p, size %d", fd, task->size / (e - s) / 1e6, task->ptr, task->size);
+    //   task = nullptr;
+    //   control_received = false;
 
-      recv_count++;
-    }
+    //   recv_count++;
+    // }
 
   }
 
@@ -332,7 +356,7 @@ void clientMode(std::string& remote_ip, int remote_port) {
   int ctrl_fd = createSocketClient(ip, remote_port, true);
   std::vector<int> data_fds;
   for (int i = 0; i < N_DATA_SOCK; ++i) {
-    int fd = createSocketClient(ip, remote_port, true);
+    int fd = createSocketClient(ip, remote_port, false);
     data_fds.push_back(fd);
   }
   LOG_DEBUG("cli built data links to %s:%d", remote_ip.c_str(), remote_port);
@@ -344,18 +368,22 @@ void clientMode(std::string& remote_ip, int remote_port) {
   void* buffer = malloc(SOCK_REQ_SIZE);
   int n_tasks = SOCK_REQ_SIZE / SOCK_TASK_SIZE;
 
+  std::unordered_map<int, int> completion_table;
+  std::mutex completion_mtx;
+
   std::vector<std::thread> background_threads;
   bool exit = false;
   for (int i = 0; i < N_DATA_SOCK; ++i) {
     background_threads.emplace_back(recvThread, data_fds[i],
                                     std::ref(task_queue), std::ref(task_mtx),
-                                    std::ref(exit));
+                                    std::ref(exit), std::ref(completion_table), std::ref(completion_mtx));
   }
 
   // experiments, start from roughly same time
   FakeControlData ccc;
   LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail recv ctrl msg");
   LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail send ctrl msg confirmation");
+
 
   for (int i = 0; i < N_EXP; ++i) {
     
@@ -369,20 +397,19 @@ void clientMode(std::string& remote_ip, int remote_port) {
         t->stage = 1;
         t->ptr = (char*)buffer + j * SOCK_TASK_SIZE;
         t->size = SOCK_TASK_SIZE;
+        t->exp_id = i;
         task_queue.push(t);
       }
-    } 
+    }
     double m1 = timeMs();
 
     // wait for completion
     int n_complete = 0;
-    while (n_complete != n_tasks) {
-      n_complete = 0;
-      for (int k = 0; k < n_tasks; ++k) {
-        if (tasks[k].stage == 2)
-          n_complete++;
-      }
+    auto found = completion_table.find(i);
+    while (found == completion_table.end()) {
+      found = completion_table.find(i);
     }
+    while (completion_table[i] != n_tasks) {}
 
     double e = timeMs();
 
@@ -400,7 +427,7 @@ void clientMode(std::string& remote_ip, int remote_port) {
     memset(buffer, 0, SOCK_REQ_SIZE);
     LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail send ctrl msg confirmation");
     
-    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
 
   exit = true;
