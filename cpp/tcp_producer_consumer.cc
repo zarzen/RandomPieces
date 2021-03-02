@@ -131,6 +131,8 @@ void sendThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
 
   FakeControlData ctrl2;
 
+  int send_count = 0;
+
   while (!exit) {
     if (!task_queue.empty()) {
       { 
@@ -157,13 +159,14 @@ void sendThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
         // LOG_DEBUG("fd %d, size %d, bw %f Gbps", fd, task->size, task->size * 8 / (e - s) / 1e6);
 
         task = nullptr;
-        
+        send_count ++;
       }
     }
   }
   ctrl_msg.exit = 1;
   LOG_IF_ERROR(::send(fd, &ctrl_msg, sizeof(ctrl_msg), 0) != sizeof(ctrl_msg),
                "send ctrl msg error");
+  LOG_DEBUG("send fd %d, send count %d", fd, send_count);
 }
 
 #define N_EXP 100
@@ -250,7 +253,7 @@ void recvThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
   FakeControlData ctrl_msg;
   bool control_received = false;
   int ctrl2;
-
+  int recv_count = 0;
   while (!exit) {
     if (!control_received) {
       // recv ctrl msg
@@ -259,7 +262,7 @@ void recvThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
                    "receive control msg failed");
       control_received = true;
     }
-    if (ctrl_msg.exit == 1) return;
+    if (ctrl_msg.exit == 1) {LOG_DEBUG("recv fd %d, recv count %d", fd, recv_count); return;}
 
     while(task_queue.empty()) {
       std::this_thread::yield();
@@ -284,12 +287,16 @@ void recvThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
 
       task->stage = 2;
       double e = timeMs();
-      LOG_DEBUG("recv fd %d, bw %f Gbps, ptr %p, size %d", fd, task->size / (e - s) / 1e6, task->ptr, task->size);
+      // LOG_DEBUG("recv fd %d, bw %f Gbps, ptr %p, size %d", fd, task->size / (e - s) / 1e6, task->ptr, task->size);
       task = nullptr;
       control_received = false;
+
+      recv_count++;
     }
 
   }
+
+  
 }
 
 void clientMode(std::string& remote_ip, int remote_port) {
