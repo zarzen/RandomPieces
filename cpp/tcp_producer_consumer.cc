@@ -26,6 +26,14 @@ static inline void fillVals(T* buff, size_t count) {
   }
 }
 
+double floatSummary(float* buff, int nelem) {
+  double sum = 0;
+  for (int i = 0; i < nelem; ++i) {
+    sum += *(buff + i);
+  }
+  return sum;
+}
+
 void* send_buff;
 
 bool createListenSocket(int* fd, int port) {
@@ -213,10 +221,14 @@ void serverMode(int port) {
                                     std::ref(exit));
   }
   LOG_DEBUG("ntask %d, timestamp %f", n_tasks, timeMs());
+
+  // let experiments start roughly same time
   FakeControlData ccc;
+  LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), 0) != sizeof(ccc), "send control msg failed");
+  LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL) != sizeof(ccc), "recv ccc confirm failed");
+
   for (int i = 0; i < N_EXP; ++i) {
-    LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), 0) != sizeof(ccc), "send control msg failed");
-    LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL) != sizeof(ccc), "recv ccc confirm failed");
+    
     // LOG_DEBUG("send ccc");
     double s = timeMs();
     // launch tasks int to queue
@@ -338,11 +350,13 @@ void clientMode(std::string& remote_ip, int remote_port) {
                                     std::ref(exit));
   }
 
-  // experiments
+  // experiments, start from roughly same time
   FakeControlData ccc;
+  LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail recv ctrl msg");
+  LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail send ctrl msg confirmation");
+
   for (int i = 0; i < N_EXP; ++i) {
-    LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail recv ctrl msg");
-    LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail send ctrl msg confirmation");
+    
     // LOG_DEBUG("recved ccc");
     double s = timeMs();
     // launch tasks int to queue
@@ -369,9 +383,14 @@ void clientMode(std::string& remote_ip, int remote_port) {
     }
 
     double e = timeMs();
-    int match = memcmp(send_buff, buffer, SOCK_REQ_SIZE);
-    LOG_INFO("recv, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms, integrity %s", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6,
-             SOCK_REQ_SIZE, (e -s), (m1 - s), match == 0 ? "true":"false");
+
+    // int match = memcmp(send_buff, buffer, SOCK_REQ_SIZE);
+    // double recv_sum = floatSummary((float*)buffer, SOCK_REQ_SIZE / sizeof(float));
+    // LOG_INFO("recv, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms, integrity %s, recv_sum %f, send_sum %f", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6,
+    //          SOCK_REQ_SIZE, (e -s), (m1 - s), match == 0 ? "true":"false", recv_sum, floatSummary((float*)send_buff, SOCK_REQ_SIZE / sizeof(float)));
+
+    LOG_INFO("recv, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6,
+             SOCK_REQ_SIZE, (e -s), (m1 - s));
 
     for (int k = 0; k < n_tasks; ++k) {
       tasks[k].stage = 0;
@@ -398,6 +417,7 @@ int main(int argc, char* argv[]) {
   send_buff = malloc(SOCK_REQ_SIZE);
   memset(send_buff, 0, SOCK_REQ_SIZE);
   fillVals<float>((float*)send_buff, SOCK_REQ_SIZE / sizeof(float));
+  LOG_DEBUG("send_buff summary %f", floatSummary((float*)send_buff, SOCK_REQ_SIZE / sizeof(float)));
 
   std::thread server(serverMode, port);
   std::this_thread::sleep_for(std::chrono::seconds(3));
