@@ -220,11 +220,11 @@ void serverMode(int port) {
     int n_complete = 0;
     while (n_complete != n_tasks){
       n_complete = 0;
-      double x = timeMs();
+      // double x = timeMs();
       for (int i = 0; i < n_tasks; ++i) {
         if (tasks[i].stage == 2) n_complete++;
       }
-      LOG_DEBUG("check cost %f ms, n_complete %d", timeMs() - x, n_complete);
+      // LOG_DEBUG("check cost %f ms, n_complete %d", timeMs() - x, n_complete);
     }
 
     double e = timeMs();
@@ -374,7 +374,7 @@ int main(int argc, char* argv[]) {
 
   server.join();
   client.join();
-  
+
   // if (mode > 0) {
   //   // listen server 
   //   serverMode(port);
