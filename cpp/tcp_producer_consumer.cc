@@ -106,7 +106,7 @@ void ipStrToInts(std::string& ip, int* ret) {
   }
 }
 
-#define N_DATA_SOCK 8
+#define N_DATA_SOCK 16
 #define SOCK_REQ_SIZE (2*1024 * 1024) // 512kB or 1MB
 #define SOCK_TASK_SIZE (64 * 1024) // 64kB
 // #define N_SOCK_REQ 4 // 4 slots 
@@ -192,16 +192,18 @@ void serverMode(int port) {
   for (int i = 0; i < N_EXP; ++i) {
     double s = timeMs();
     // launch tasks int to queue
-    for (int j = 0; j < n_tasks; ++j) {
-      SocketTask* t = &tasks[j];
-      t->stage = 1;
-      t->ptr = (char*)buffer + j * SOCK_TASK_SIZE;
-      t->size = SOCK_TASK_SIZE;
-      {
-        std::lock_guard<std::mutex> lk(task_mtx);
+    {
+      std::lock_guard<std::mutex> lk(task_mtx);
+      for (int j = 0; j < n_tasks; ++j) {
+        SocketTask* t = &tasks[j];
+        t->stage = 1;
+        t->ptr = (char*)buffer + j * SOCK_TASK_SIZE;
+        t->size = SOCK_TASK_SIZE;
         task_queue.push(t);
       }
     }
+
+    double m1 = timeMs();
 
     // wait for completion
     int n_complete = 0;
@@ -213,7 +215,7 @@ void serverMode(int port) {
     }
 
     double e = timeMs();
-    LOG_INFO("bw %f Gbps, size %d", SOCK_REQ_SIZE / (e - s) / 1e6, SOCK_REQ_SIZE);
+    LOG_INFO("bw %f Gbps, size %d, time %f ms, launch cost %f ms", SOCK_REQ_SIZE / (e - s) / 1e6, SOCK_REQ_SIZE, (e-s), (m1 - s));
   }
 
   exit = true;
