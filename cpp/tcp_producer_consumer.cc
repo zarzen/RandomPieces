@@ -201,6 +201,7 @@ void serverMode(int port) {
   FakeControlData ccc;
   for (int i = 0; i < N_EXP; ++i) {
     LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), 0) != sizeof(ccc), "send control msg failed");
+    LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL) != sizeof(ccc), "recv ccc confirm failed");
     // LOG_DEBUG("send ccc");
     double s = timeMs();
     // launch tasks int to queue
@@ -275,12 +276,15 @@ void recvThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
     }
     
     if (task != nullptr) {
+      double s = timeMs();
       int ret = ::recv(fd, task->ptr, task->size, MSG_WAITALL);
       LOG_IF_ERROR(ret != task->size, "error while recv data, ret %d", ret);
 
       // LOG_IF_ERROR(::send(fd, &ctrl2, sizeof(ctrl2), MSG_WAITALL) != sizeof(ctrl2), "fail sending confirmation");
 
       task->stage = 2;
+      double e = timeMs();
+      LOG_DEBUG("recv fd %d, bw %f Gbps, ptr %p, size %d", fd, task->size / (e - s) / 1e6, task->ptr, task->size);
       task = nullptr;
       control_received = false;
     }
@@ -319,6 +323,7 @@ void clientMode(std::string& remote_ip, int remote_port) {
   FakeControlData ccc;
   for (int i = 0; i < N_EXP; ++i) {
     LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail recv ctrl msg");
+    LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail send ctrl msg confirmation");
     // LOG_DEBUG("recved ccc");
     double s = timeMs();
     // launch tasks int to queue
