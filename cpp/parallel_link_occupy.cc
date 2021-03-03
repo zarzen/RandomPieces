@@ -147,6 +147,22 @@ struct FakeControlData {
   char pad[4];
 };
 
+void bandwidthReport(bool& exit, std::vector<size_t>& sizes, std::vector<size_t>& pre_sizes, const char* prefix) {
+    while (!exit) {
+    int interval_ms = 500; // 200ms
+    std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
+
+    size_t acc_size = 0;
+    for (int i = 0; i < N_DATA_SOCK; ++i) {
+      size_t d = sizes[i] - pre_sizes[i];
+      LOG_INFO("%s conn %d, bw %f Gbps", prefix, i, (d * 8 / float(interval_ms)/1e6));
+      pre_sizes[i] = sizes[i];
+      acc_size += d;
+    }
+    LOG_INFO("%s total bw %f Gbps", prefix, acc_size * 8 / float(interval_ms) / 1e6);
+  }
+}
+
 void sendThread(int tid, std::vector<size_t>& sent_sizes, int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bool& exit) {
 
   SocketTask* task = nullptr;
@@ -242,25 +258,14 @@ void serverMode(int port) {
                                     std::ref(exit));
   }
   LOG_DEBUG("ntask %d, timestamp %f", n_tasks, timeMs());
+  std::thread bw_report(bandwidthReport, std::ref(exit), std::ref(sent_sizes), std::ref(pre_sizes), "[server send]");
 
   // let experiments start roughly same time
   FakeControlData ccc;
   LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), 0) != sizeof(ccc), "send control msg failed");
   LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL) != sizeof(ccc), "recv ccc confirm failed");
 
-  while (true) {
-    int interval_ms = 200; // 200ms
-    std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
-
-    size_t acc_size = 0;
-    for (int i = 0; i < N_DATA_SOCK; ++i) {
-      size_t d = sent_sizes[i] - pre_sizes[i];
-      LOG_INFO("server send conn %d, bw %f Gbps", i, (d * 8 / float(interval_ms)/1e6));
-      pre_sizes[i] = sent_sizes[i];
-      acc_size += d;
-    }
-    LOG_INFO("server total bw %f Gbps", acc_size * 8 / float(interval_ms) / 1e6);
-  }
+  while (true) {std::this_thread::yield();}
 
   exit = true;
   for (auto& t : background_threads) {
@@ -352,25 +357,14 @@ void clientMode(std::string& remote_ip, int remote_port) {
                                     std::ref(task_queue), std::ref(task_mtx),
                                     std::ref(exit), std::ref(completion_table), std::ref(completion_mtx));
   }
+  std::thread bw_report(bandwidthReport, std::ref(exit), std::ref(recv_sizes), std::ref(pre_sizes), "[server send]");
 
   // experiments, start from roughly same time
   FakeControlData ccc;
   LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail recv ctrl msg");
   LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail send ctrl msg confirmation");
 
-  while (true) {
-    int interval_ms = 200; // 200ms
-    std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
-
-    size_t acc_size = 0;
-    for (int i = 0; i < N_DATA_SOCK; ++i) {
-      size_t d = recv_sizes[i] - pre_sizes[i];
-      LOG_INFO("client recv conn %d, bw %f Gbps", i, (d * 8 / float(interval_ms)/1e6));
-      pre_sizes[i] = recv_sizes[i];
-      acc_size += d;
-    }
-    LOG_INFO("client total bw %f Gbps", acc_size * 8 / float(interval_ms) / 1e6);
-  }
+  while (true) {std::this_thread::yield();}
 
   exit = true;
   for (auto& t : background_threads) {
