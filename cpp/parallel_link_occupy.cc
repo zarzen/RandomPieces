@@ -202,8 +202,8 @@ void sendThread(int tid, std::vector<size_t>& sent_sizes, int fd, std::queue<Soc
         // LOG_IF_ERROR(::recv(fd, &ctrl2, sizeof(ctrl2), MSG_WAITALL) != sizeof(ctrl2), "failed at recv confirmation");
 
         task->stage = 2;
-        double e = timeMs();
-        LOG_DEBUG("tid %d, fd %d, size %d, bw %f Gbps", tid, fd, task->size, task->size * 8 / (e - s) / 1e6);
+        // double e = timeMs();
+        // LOG_DEBUG("tid %d, fd %d, size %d, bw %f Gbps", tid, fd, task->size, task->size * 8 / (e - s) / 1e6);
 
         task = nullptr;
         send_count ++;
@@ -286,7 +286,7 @@ void serverMode(int port) {
   while (true) {
     double s = timeMs();
     // task align
-    LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), 0) != sizeof(ccc), "send control msg failed");
+    // LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), 0) != sizeof(ccc), "send control msg failed");
 
     // launch socket tasks
     int remain_tasks = n_tasks;
@@ -304,7 +304,7 @@ void serverMode(int port) {
 
           sock_task_queues[i]->push(t);
 
-          LOG_DEBUG("launched to conn %d, fd %d", i, data_fds[i]);
+          // LOG_DEBUG("launched to conn %d, fd %d", i, data_fds[i]);
 
           j++;
           remain_tasks--;
@@ -312,7 +312,7 @@ void serverMode(int port) {
       }
     }
     double m1 = timeMs();
-    LOG_DEBUG("launched %d tasks", j);
+    LOG_DEBUG("launched %d tasks, cost %f ms", j, (m1 - s));
 
     // check completion
     int n_complete = 0;
@@ -322,9 +322,9 @@ void serverMode(int port) {
         if (tasks[k].stage == 2) n_complete++;
       }
     }
-    LOG_DEBUG("completed exp %d", exp_id);
+    // LOG_DEBUG("completed exp %d", exp_id);
     // task align
-    LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), 0) != sizeof(ccc), "send control msg failed");
+    // LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), 0) != sizeof(ccc), "send control msg failed");
 
     double e = timeMs();
     LOG_INFO("send, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms", exp_id, SOCK_REQ_SIZE * 8 / (e - s) / 1e6, SOCK_REQ_SIZE, (e-s), (m1 - s));
@@ -373,9 +373,9 @@ void recvThread(int tid, std::vector<size_t>& sizes, int fd, std::queue<SocketTa
       // data
       int ret = ::recv(fd, data_buff, SOCK_TASK_SIZE, MSG_WAITALL);
       LOG_IF_ERROR(ret != SOCK_TASK_SIZE, "error while recv data, ret %d", ret);
-      // double e = timeMs();
-      // LOG_DEBUG("recv fd %d, bw %f Gbps", fd, SOCK_TASK_SIZE * 8 / (e - s) /
-      // 1e6);
+      double e = timeMs();
+      LOG_DEBUG("recv %d fd %d, bw %f Gbps", tid, fd,
+                SOCK_TASK_SIZE * 8 / (e - s) / 1e6);
       {
         std::lock_guard<std::mutex> lk(completion_mtx);
         auto found = completion_table.find(ctrl_msg.exp_id);
@@ -446,7 +446,7 @@ void clientMode(std::string& remote_ip, int remote_port) {
   while (true) {
     double s = timeMs();
     // task align
-    LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), 0) != sizeof(ccc), "recv control msg failed");
+    // LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), 0) != sizeof(ccc), "recv control msg failed");
     // launch socket tasks
     int remain_tasks = n_tasks;
     int j = 0;
@@ -486,7 +486,7 @@ void clientMode(std::string& remote_ip, int remote_port) {
     }
 
     // task align
-    LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), 0) != sizeof(ccc), "send control msg failed");
+    // LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), 0) != sizeof(ccc), "send control msg failed");
     double e = timeMs();
     LOG_INFO("recv, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms", exp_id, SOCK_REQ_SIZE * 8 / (e - s) / 1e6, SOCK_REQ_SIZE, (e-s), (m1 - s));
 
