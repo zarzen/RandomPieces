@@ -126,8 +126,8 @@ void ipStrToInts(std::string& ip, int* ret) {
   }
 }
 
-#define N_DATA_SOCK 16
-#define SOCK_REQ_SIZE (8*1024 * 1024) // 512kB or 1MB
+#define N_DATA_SOCK 8
+#define SOCK_REQ_SIZE (48*1024 * 1024) // 512kB or 1MB
 #define SOCK_TASK_SIZE (128 * 1024) // 64kB
 // #define N_SOCK_REQ 4 // 4 slots 
 #define MAX_TASKS (2 * 1024) // for test only
@@ -192,7 +192,7 @@ void sendThread(int fd, std::queue<SocketTask*>& task_queue, std::mutex& mtx, bo
   LOG_DEBUG("send fd %d, send count %d", fd, send_count);
 }
 
-#define N_EXP 100
+#define N_EXP 200
 
 void serverMode(int port) {
   int listen_fd;
