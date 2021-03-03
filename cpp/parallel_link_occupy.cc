@@ -127,7 +127,7 @@ void ipStrToInts(std::string& ip, int* ret) {
   }
 }
 
-#define N_DATA_SOCK 8
+#define N_DATA_SOCK 5
 #define SOCK_REQ_SIZE (48*1024 * 1024) // 512kB or 1MB
 #define SOCK_TASK_SIZE (128 * 1024) // 64kB
 // #define N_SOCK_REQ 4 // 4 slots 
@@ -252,11 +252,14 @@ void serverMode(int port) {
     int interval_ms = 200; // 200ms
     std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
 
+    size_t acc_size = 0;
     for (int i = 0; i < N_DATA_SOCK; ++i) {
       size_t d = sent_sizes[i] - pre_sizes[i];
       LOG_INFO("server send conn %d, bw %f Gbps", i, (d * 8 / float(interval_ms)/1e6));
       pre_sizes[i] = sent_sizes[i];
+      acc_size += d;
     }
+    LOG_INFO("server total bw %f Gbps", acc_size * 8 / float(interval_ms) / 1e6);
   }
 
   exit = true;
@@ -276,6 +279,8 @@ void recvThread(int tid, std::vector<size_t>& sizes, int fd, std::queue<SocketTa
   void* tmp_buff = malloc(SOCK_TASK_SIZE);
 
   void* data_buff = new char[SOCK_TASK_SIZE];
+
+  int data_size = sizeof(ctrl_msg) + SOCK_TASK_SIZE;
 
   while (!exit) {
     double s = timeMs();
@@ -309,6 +314,7 @@ void recvThread(int tid, std::vector<size_t>& sizes, int fd, std::queue<SocketTa
     } else {
       LOG_ERROR("unknow traffic type");
     }
+    sizes[tid] += data_size;
   }
 
 }
@@ -356,11 +362,14 @@ void clientMode(std::string& remote_ip, int remote_port) {
     int interval_ms = 200; // 200ms
     std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
 
+    size_t acc_size = 0;
     for (int i = 0; i < N_DATA_SOCK; ++i) {
       size_t d = recv_sizes[i] - pre_sizes[i];
-      LOG_INFO("recv send conn %d, bw %f Gbps", i, (d * 8 / float(interval_ms)/1e6));
+      LOG_INFO("client recv conn %d, bw %f Gbps", i, (d * 8 / float(interval_ms)/1e6));
       pre_sizes[i] = recv_sizes[i];
+      acc_size += d;
     }
+    LOG_INFO("client total bw %f Gbps", acc_size * 8 / float(interval_ms) / 1e6);
   }
 
   exit = true;
