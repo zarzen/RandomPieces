@@ -13,6 +13,9 @@
 #include <thread>
 #include <unordered_map>
 
+#define DIVUP(x, y) \
+    (((x)+(y)-1)/(y))
+
 
 double timeMs() {
   return std::chrono::high_resolution_clock::now().time_since_epoch().count() /
@@ -187,6 +190,7 @@ void sendThread(int tid, std::vector<size_t>& sent_sizes, int fd, std::queue<Soc
 
       if (task != nullptr) {
         ctrl_msg.exp_id = task->exp_id;
+        ctrl_msg.traffic_type = 1;
         LOG_IF_ERROR(
             ::send(fd, &ctrl_msg, sizeof(ctrl_msg), MSG_WAITALL) != sizeof(ctrl_msg),
             "send ctrl msg error");
@@ -205,6 +209,8 @@ void sendThread(int tid, std::vector<size_t>& sent_sizes, int fd, std::queue<Soc
         send_count ++;
       }
     } else {
+      // background traffic
+      ctrl_msg.traffic_type = 0;
       LOG_IF_ERROR(::send(fd, &ctrl_msg, sizeof(ctrl_msg), MSG_WAITALL) !=
                      sizeof(ctrl_msg),
                  "send ctrl msg error");
@@ -244,28 +250,88 @@ void serverMode(int port) {
 
   // void* buffer = malloc(SOCK_REQ_SIZE);
   void* buffer = send_buff;
-  int n_tasks = SOCK_REQ_SIZE / SOCK_TASK_SIZE;
 
   std::vector<std::thread> background_threads;
   std::vector<size_t> sent_sizes;
   std::vector<size_t> pre_sizes;
+
+  std::vector<std::queue<SocketTask*>> sock_task_queues;
+  std::vector<std::mutex> task_queue_mtxs(N_DATA_SOCK);
+
   bool exit = false;
   for (int i = 0; i < N_DATA_SOCK; ++i) {
     sent_sizes.push_back(0);
     pre_sizes.push_back(0);
+    sock_task_queues.emplace_back();
+
     background_threads.emplace_back(sendThread, i, std::ref(sent_sizes), data_fds[i],
-                                    std::ref(task_queue), std::ref(task_mtx),
+                                    std::ref(sock_task_queues[i]), std::ref(task_queue_mtxs[i]),
                                     std::ref(exit));
   }
-  LOG_DEBUG("ntask %d, timestamp %f", n_tasks, timeMs());
+  
   std::thread bw_report(bandwidthReport, std::ref(exit), std::ref(sent_sizes), std::ref(pre_sizes), "[server send]");
 
   // let experiments start roughly same time
   FakeControlData ccc;
-  LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), 0) != sizeof(ccc), "send control msg failed");
+  int exp_id = 0;
+  int n_tasks = DIVUP(SOCK_REQ_SIZE, SOCK_TASK_SIZE); // FIXME: assume always well aligned
+  int n_foreach = DIVUP(n_tasks, N_DATA_SOCK);
+  LOG_DEBUG("ntask %d, timestamp %f", n_tasks, timeMs());
+
+  LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), 0) != sizeof(ccc),
+               "send control msg failed");
   LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL) != sizeof(ccc), "recv ccc confirm failed");
 
-  while (true) {std::this_thread::yield();}
+  while (true) {
+    double s = timeMs();
+    // task align
+    LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), 0) != sizeof(ccc), "send control msg failed");
+
+    // launch socket tasks
+    int remain_tasks = n_tasks;
+    int j = 0;
+
+    for (int i = 0; i < N_DATA_SOCK; ++i) {
+      std::lock_guard<std::mutex> lk(task_queue_mtxs[i]);
+
+      for (int x = 0; x < n_foreach; ++x) {
+        if (remain_tasks > 0) {
+          SocketTask* t = &tasks[j];
+          t->size = SOCK_TASK_SIZE;
+          t->exp_id = exp_id;
+          t->ptr = (char*)buffer + j * SOCK_TASK_SIZE;
+
+          sock_task_queues[i].push(t);
+
+          j++;
+          remain_tasks--;
+        }
+      }
+    }
+    double m1 = timeMs();
+
+    // check completion
+    int n_complete = 0;
+    while (n_complete != n_tasks){
+      n_complete = 0;
+      for (int k = 0; k < n_tasks; ++k) {
+        if (tasks[k].stage == 2) n_complete++;
+      }
+    }
+
+    // task align
+    LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), 0) != sizeof(ccc), "send control msg failed");
+
+    double e = timeMs();
+    LOG_INFO("send, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms", exp_id, SOCK_REQ_SIZE * 8 / (e - s) / 1e6, SOCK_REQ_SIZE, (e-s), (m1 - s));
+
+    for (int k = 0; k < n_tasks; ++k) {
+      tasks[k].stage = 0;
+    }
+
+    exp_id++;
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
 
   exit = true;
   for (auto& t : background_threads) {
@@ -341,7 +407,6 @@ void clientMode(std::string& remote_ip, int remote_port) {
   std::mutex task_mtx;
 
   void* buffer = malloc(SOCK_REQ_SIZE);
-  int n_tasks = SOCK_REQ_SIZE / SOCK_TASK_SIZE;
 
   std::unordered_map<int, int> completion_table;
   std::mutex completion_mtx;
@@ -349,22 +414,84 @@ void clientMode(std::string& remote_ip, int remote_port) {
   std::vector<std::thread> background_threads;
   std::vector<size_t> recv_sizes;
   std::vector<size_t> pre_sizes;
+  std::vector<std::queue<SocketTask*>> sock_task_queues;
+  std::vector<std::mutex> task_queue_mtxs(N_DATA_SOCK);
+
   bool exit = false;
   for (int i = 0; i < N_DATA_SOCK; ++i) {
+    sock_task_queues.emplace_back();
+
     recv_sizes.push_back(0);
     pre_sizes.push_back(0);
     background_threads.emplace_back(recvThread, i, std::ref(recv_sizes), data_fds[i],
-                                    std::ref(task_queue), std::ref(task_mtx),
+                                    std::ref(sock_task_queues[i]), std::ref(task_queue_mtxs[i]),
                                     std::ref(exit), std::ref(completion_table), std::ref(completion_mtx));
   }
   std::thread bw_report(bandwidthReport, std::ref(exit), std::ref(recv_sizes), std::ref(pre_sizes), "[client recv]");
+
+  int exp_id = 0;
+  int n_tasks = DIVUP(SOCK_REQ_SIZE, SOCK_TASK_SIZE); // FIXME: assume always well aligned
+  int n_foreach = DIVUP(n_tasks, N_DATA_SOCK);
 
   // experiments, start from roughly same time
   FakeControlData ccc;
   LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail recv ctrl msg");
   LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail send ctrl msg confirmation");
 
-  while (true) {std::this_thread::yield();}
+  while (true) {
+    double s = timeMs();
+    // task align
+    LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), 0) != sizeof(ccc), "recv control msg failed");
+    // launch socket tasks
+    int remain_tasks = n_tasks;
+    int j = 0;
+
+    for (int i = 0; i < N_DATA_SOCK; ++i) {
+      std::lock_guard<std::mutex> lk(task_queue_mtxs[i]);
+
+      for (int x = 0; x < n_foreach; ++x) {
+        if (remain_tasks > 0) {
+          SocketTask* t = &tasks[j];
+          t->size = SOCK_TASK_SIZE;
+          t->exp_id = exp_id;
+          t->ptr = (char*)buffer + j * SOCK_TASK_SIZE;
+
+          sock_task_queues[i].push(t);
+
+          j++;
+          remain_tasks--;
+        }
+      }
+    }
+    double m1 = timeMs();
+
+    // wait for completion
+    auto found = completion_table.end();
+    while (found == completion_table.end()) {
+      std::this_thread::yield();
+      std::lock_guard<std::mutex> lk(completion_mtx);
+      found = completion_table.find(exp_id);
+    }
+
+    int n_complete = 0;
+    while (n_complete != n_tasks) {
+      std::this_thread::yield();
+      std::lock_guard<std::mutex> lk(completion_mtx);
+      n_complete = completion_table[exp_id];
+    }
+
+    // task align
+    LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), 0) != sizeof(ccc), "send control msg failed");
+    double e = timeMs();
+    LOG_INFO("recv, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms", exp_id, SOCK_REQ_SIZE * 8 / (e - s) / 1e6, SOCK_REQ_SIZE, (e-s), (m1 - s));
+
+    for (int k = 0; k < n_tasks; ++k) {
+      tasks[k].stage = 0;
+    }
+
+    exp_id++;
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
 
   exit = true;
   for (auto& t : background_threads) {
