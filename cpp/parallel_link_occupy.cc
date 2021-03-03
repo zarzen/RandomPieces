@@ -357,7 +357,7 @@ void clientMode(std::string& remote_ip, int remote_port) {
                                     std::ref(task_queue), std::ref(task_mtx),
                                     std::ref(exit), std::ref(completion_table), std::ref(completion_mtx));
   }
-  std::thread bw_report(bandwidthReport, std::ref(exit), std::ref(recv_sizes), std::ref(pre_sizes), "[server send]");
+  std::thread bw_report(bandwidthReport, std::ref(exit), std::ref(recv_sizes), std::ref(pre_sizes), "[client recv]");
 
   // experiments, start from roughly same time
   FakeControlData ccc;
