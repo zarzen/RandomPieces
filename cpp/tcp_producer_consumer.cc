@@ -390,7 +390,7 @@ void clientMode(std::string& remote_ip, int remote_port) {
   LOG_IF_ERROR(::recv(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail recv ctrl msg");
   LOG_IF_ERROR(::send(ctrl_fd, &ccc, sizeof(ccc), MSG_WAITALL)!= sizeof(ccc), "fail send ctrl msg confirmation");
 
-
+  double acc_time = 0;
   for (int i = 0; i < N_EXP; ++i) {
     
     // LOG_DEBUG("recved ccc");
@@ -426,7 +426,7 @@ void clientMode(std::string& remote_ip, int remote_port) {
     }
 
     double e = timeMs();
-
+    acc_time += (e - s);
     // int match = memcmp(send_buff, buffer, SOCK_REQ_SIZE);
     // double recv_sum = floatSummary((float*)buffer, SOCK_REQ_SIZE / sizeof(float));
     // LOG_INFO("recv, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms, integrity %s, recv_sum %f, send_sum %f", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6,
@@ -436,6 +436,7 @@ void clientMode(std::string& remote_ip, int remote_port) {
     //          SOCK_REQ_SIZE, (e -s), (m1 - s), recv_sum);
     LOG_INFO("recv, exp %d, bw %f Gbps, size %d, time %f ms, launch cost %f ms", i, SOCK_REQ_SIZE * 8 / (e - s) / 1e6,
              SOCK_REQ_SIZE, (e -s), (m1 - s));
+    LOG_INFO("recv exp %d, avg bw %f Gbps", i, SOCK_REQ_SIZE * 8 / (acc_time / (i+1)) / 1e6);
 
     for (int k = 0; k < n_tasks; ++k) {
       tasks[k].stage = 0;
