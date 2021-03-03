@@ -31,6 +31,8 @@ void tcp_server_thd(std::string ip, int port, int* num_conn, int target_conn) {
   std::vector<std::thread> handlers;
   std::vector<size_t> sizes;
   std::vector<std::shared_ptr<TCPAgent>> tcp_conns;
+  std::vector<size_t> pre_sizes;
+
   for (int i = 0; i < target_conn; i++) {
     std::shared_ptr<TCPAgent> cAgent = server.acceptCli();
     tcp_conns.push_back(cAgent);
@@ -41,22 +43,23 @@ void tcp_server_thd(std::string ip, int port, int* num_conn, int target_conn) {
 
     (*num_conn) += 1;
     std::cout << "accepted tcp conn " << i << "\n";
+    pre_sizes.push_back(0);
   }
 
   size_t pre_size = 0;
+  
   while (true) {
-    // sleep for 10s
-    int interval = 5;
-    std::this_thread::sleep_for(std::chrono::seconds(interval));
-    size_t cur_size = 0UL;
+
+    int interval = 500; // ms
+    // std::this_thread::sleep_for(std::chrono::seconds(interval));
+    std::this_thread::sleep_for(std::chrono::milliseconds(interval));
+    // size_t cur_size = 0UL;
     for (int i = 0; i < sizes.size(); i++) {
-      cur_size += sizes[i];
+      // cur_size += sizes[i];
+      size_t d = sizes[i] - pre_sizes[i];
+      LOG_INFO("conn %d, bw %f Gbps", i, (d * 8 / float(interval)/1e6));
+      pre_sizes[i] = sizes[i];
     }
-    size_t d = cur_size - pre_size;
-    pre_size = cur_size;
-    float bw = (d * 8 / float(interval)) / 1e9;  // Gbps
-    std::cout << "received " << d << "bytes in " << interval << "s "
-              << "bw: " << bw << "Gbps\n";
   }
 }
 
