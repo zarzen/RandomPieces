@@ -107,7 +107,7 @@ int main(int argc, char* argv[])
 {
   bool shutdown=false;
   std::vector<std::thread> back_thds;
-  launchBackgroundThreads(back_thds, 5, &shutdown);
+  launchBackgroundThreads(back_thds, 6, &shutdown);
 
   if (argc > 1) {
     nDevices = std::stoi(argv[1]);
@@ -145,7 +145,7 @@ int main(int argc, char* argv[])
     size_t count = trans_bytes / sizeof(float);
     vector<float> time_costs;
 
-    for (int j = 0; j < 50; ++j) {
+    for (int j = 0; j < 100; ++j) {
       cudaEventRecord(start);
       NCCLCHECK(ncclGroupStart());
       NCCLCHECK(ncclSend(sendbuff, count, ncclFloat, next_peer, comm, s));
