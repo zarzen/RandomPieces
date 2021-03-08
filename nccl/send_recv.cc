@@ -9,6 +9,7 @@
 #include <vector>
 #include <numeric>
 #include <string>
+#include <thread>
 
 using std::vector;
 int nDevices = 4;
@@ -81,9 +82,33 @@ void initNccl(int* argc, char*** argv, ncclComm_t& comm, int& myRank, int& nRank
   printf("[MPI Rank %d] Success \n", myRank);
 }
 
+void whileThread(bool* shutdown) {
+  int a = 0;
+  int b = 10;
+  while (!(*shutdown)) {
+    a = (a + 1) % b;
+  }
+}
+
+void launchBackgroundThreads(std::vector<std::thread>& threads, int n, bool* shutdown) {
+  for (int i = 0; i < n; ++i) {
+    threads.push_back(std::thread(whileThread, shutdown));
+  }
+}
+
+void exitBackgroundThreads(std::vector<std::thread>& threads, bool* shutdown) {
+  *shutdown = true;
+  for (auto& t: threads) {
+    t.join();
+  }
+}
 
 int main(int argc, char* argv[])
 {
+  bool shutdown=false;
+  std::vector<std::thread> back_thds;
+  launchBackgroundThreads(back_thds, 5, &shutdown);
+
   if (argc > 1) {
     nDevices = std::stoi(argv[1]);
   }
@@ -149,5 +174,6 @@ int main(int argc, char* argv[])
   //finalizing MPI
   MPICHECK(MPI_Finalize());
 
+  exitBackgroundThreads(back_thds, &shutdown);
   return 0;
 }
