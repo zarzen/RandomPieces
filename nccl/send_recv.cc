@@ -159,7 +159,7 @@ int main(int argc, char* argv[])
       time_costs.push_back(milliseconds);
     }
     double avg = std::accumulate(time_costs.begin(), time_costs.end(), 0.0) / time_costs.size();
-    printf("buffer size %zu, send&recv cost %f ms\n", trans_bytes, avg);
+    printf("buffer size %zu, send&recv cost %f ms, bw %f Gbps\n", trans_bytes, avg, trans_bytes * 8 / avg / 1e6);
   }
 
   //free device buffers
