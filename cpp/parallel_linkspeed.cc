@@ -38,7 +38,10 @@ struct SocketTask
   int size;
 };
 
-void SocketOpLoop(ThdSafeQueue<SocketTask>* queue, bool* exit, int fd) {
+void SocketOpLoop(ThdSafeQueue<SocketTask>* queue,
+                  ThdSafeQueue<int>* complete_queue,
+                  bool* exit,
+                  int fd) {
   SocketTask task;
 
   while(!(*exit)) {
@@ -54,10 +57,13 @@ void SocketOpLoop(ThdSafeQueue<SocketTask>* queue, bool* exit, int fd) {
     } else {
       LOG_IF_ERROR(::recv(fd, task.ptr, task.size, MSG_WAITALL) != task.size, "recv data error");
     }
+
+    complete_queue->push(1);
   }
 }
 
-void launchSendRecv(std::vector<ThdSafeQueue<SocketTask>*>& task_queues,
+void launchSendRecvWait(std::vector<ThdSafeQueue<SocketTask>*>& task_queues,
+                    ThdSafeQueue<int>& complete_queue,
                     int size,
                     int n_sock,
                     char* send_buff,
@@ -93,27 +99,17 @@ void launchSendRecv(std::vector<ThdSafeQueue<SocketTask>*>& task_queues,
       task_queues[qidx]->push(recv_task);
       task_queues[qidx + half_sock]->push(send_task);
     }
-    
+
     ++t;
   }
-}
 
-void waitTasks(std::vector<ThdSafeQueue<SocketTask>*>& task_queues) {
-
-  bool exit = false;
-  while (!exit) {
-    bool all_empty = true;
-
-    for (auto q:task_queues) {
-      if (!q->isEmpty()) {
-        all_empty = false;
-        std::this_thread::yield();
-      }
-    }
-
-    if (all_empty) exit = true;
+  int tmp;
+  for (int i = 0; i < t; ++i) {
+    complete_queue.pop(&tmp);
+    complete_queue.pop(&tmp);
   }
 }
+
 
 void cleanup(std::vector<ThdSafeQueue<SocketTask>*>& task_queues,
   std::vector<std::thread*>& socket_threads, char* send_buff, char* recv_buff) {
@@ -139,6 +135,8 @@ void serverMode(int port) {
 
   std::vector<int> socket_fds;
   std::vector<ThdSafeQueue<SocketTask>*> task_queues;
+  ThdSafeQueue<int> completion_queue;
+
   std::vector<std::thread*> socket_threads;
   bool exit = false;
 
@@ -146,7 +144,7 @@ void serverMode(int port) {
     int fd = socketAccept(listen_fd, true);
     socket_fds.push_back(fd);
     ThdSafeQueue<SocketTask>* q = new ThdSafeQueue<SocketTask>();
-    std::thread* thd = new std::thread(SocketOpLoop, q, &exit, fd);
+    std::thread* thd = new std::thread(SocketOpLoop, q, &completion_queue, &exit, fd);
     task_queues.push_back(q);
     socket_threads.push_back(thd);
   }
@@ -165,8 +163,7 @@ void serverMode(int port) {
       exit = true;
       LOG_INFO("Exiting");
     } else {
-      launchSendRecv(task_queues, size, n_socks, send_buff, recv_buff, 0);
-      waitTasks(task_queues);
+      launchSendRecvWait(task_queues, completion_queue, size, n_socks, send_buff, recv_buff, 0);
 
       double end = timeMs();
 
@@ -185,13 +182,14 @@ void clientMode(std::string& ip_str, int port) {
   std::vector<int> socket_fds;
   std::vector<ThdSafeQueue<SocketTask>*> task_queues;
   std::vector<std::thread*> socket_threads;
+  ThdSafeQueue<int> completion_queue;
   bool exit = false;
 
   for (int i = 0; i < n_socks; ++i) {
     int fd = createSocketClient(ip, port, true);
     socket_fds.push_back(fd);
     ThdSafeQueue<SocketTask>* q = new ThdSafeQueue<SocketTask>();
-    std::thread* thd = new std::thread(SocketOpLoop, q, &exit, fd);
+    std::thread* thd = new std::thread(SocketOpLoop, q, &completion_queue, &exit, fd);
     task_queues.push_back(q);
     socket_threads.push_back(thd);
   }
@@ -209,8 +207,7 @@ void clientMode(std::string& ip_str, int port) {
       LOG_INFO("exiting");
       continue;
     } else {
-      launchSendRecv(task_queues, size, n_socks, send_buff, recv_buff, 1);
-      waitTasks(task_queues);
+      launchSendRecvWait(task_queues, completion_queue, size, n_socks, send_buff, recv_buff, 1);
 
       double end = timeMs();
       LOG_INFO("size %d, time %f ms, bandwidth %f Gbps", size, end - start, size * 8 / (end - start) / 1e6);
