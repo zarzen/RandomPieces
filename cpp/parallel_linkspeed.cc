@@ -167,7 +167,7 @@ void serverMode(int port) {
 
       double end = timeMs();
 
-      LOG_INFO("size %d, time %f ms, bandwidth %f Gbps", size, end - start, size * 8 / (end - start) / 1e6);
+      LOG_INFO("size %d, time %f ms, bandwidth %f Gbps, start time %f", size, end - start, size * 8 / (end - start) / 1e6, start);
     }
   }
 
@@ -210,7 +210,7 @@ void clientMode(std::string& ip_str, int port) {
       launchSendRecvWait(task_queues, completion_queue, size, n_socks, send_buff, recv_buff, 1);
 
       double end = timeMs();
-      LOG_INFO("size %d, time %f ms, bandwidth %f Gbps", size, end - start, size * 8 / (end - start) / 1e6);
+      LOG_INFO("size %d, time %f ms, bandwidth %f Gbps, receive ctrl time %f", size, end - start, size * 8 / (end - start) / 1e6, start);
     }
 
   }
