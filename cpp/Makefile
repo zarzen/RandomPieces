@@ -1,4 +1,4 @@
-CC_ARGS = -std=c++14 -DLOG_LEVEL=0x03 -g -O0
+CC_ARGS = -std=c++14 -DLOG_LEVEL=0x02 -g -O0
 CC = g++ $(CC_ARGS)
 
 all: producer_consumer send_recv_ring parallel_background_traffic ctrl_test

@@ -6,6 +6,7 @@
 #include <iostream>
 #include <cassert>
 
+
 static int n_socks = 16;
 static int min_chunk = 64 * 1024;
 static int max_buffer = 4 * 1024 * 1024;
@@ -62,7 +63,7 @@ void SocketOpLoop(ThdSafeQueue<SocketTask>* queue,
   }
 }
 
-void launchSendRecvWait(std::vector<ThdSafeQueue<SocketTask>*>& task_queues,
+int launchSendRecv(std::vector<ThdSafeQueue<SocketTask>*>& task_queues,
                     ThdSafeQueue<int>& complete_queue,
                     int size,
                     int n_sock,
@@ -103,11 +104,7 @@ void launchSendRecvWait(std::vector<ThdSafeQueue<SocketTask>*>& task_queues,
     ++t;
   }
 
-  int tmp;
-  for (int i = 0; i < t; ++i) {
-    complete_queue.pop(&tmp);
-    complete_queue.pop(&tmp);
-  }
+  return t;
 }
 
 
@@ -125,6 +122,24 @@ void cleanup(std::vector<ThdSafeQueue<SocketTask>*>& task_queues,
   free(recv_buff);
 }
 
+void waitCompletion(int n, ThdSafeQueue<int>& cq) {
+  int tmp;
+  for (int i = 0; i < n; ++i) {
+    cq.pop(&tmp);
+  }
+}
+
+void spinWait(int us) {
+  double _s = timeMs();
+  while ((timeMs() - _s) * 1e3 < us)
+    std::this_thread::yield();
+}
+
+struct CtrlMessage{
+  int size;
+  int repeat;
+  int latency;
+};
 
 void serverMode(int port) {
   int listen_fd;
@@ -152,25 +167,38 @@ void serverMode(int port) {
   char* send_buff = (char*)malloc(max_buffer);
   char* recv_buff = (char*)malloc(max_buffer);
 
-  while (!exit) {
-    int size;
-    std::cout << "enter size for exp:";
-    std::cin >> size;
-    double start = timeMs();
-    LOG_IF_ERROR(::send(ctrl_fd, &size, sizeof(size), 0) != sizeof(size), "send ctrl msg failed");
+  CtrlMessage c_msg;
 
-    if (size < 0) {
+  while (!exit) {
+    std::cout << "enter 'size repeat latency(us)': ";
+    std::cin >> c_msg.size;
+    std::cin >> c_msg.repeat;
+    std::cin >> c_msg.latency;
+
+    double start = timeMs();
+    LOG_IF_ERROR(::send(ctrl_fd, &c_msg, sizeof(c_msg), 0) != sizeof(c_msg), "send ctrl msg failed");
+
+    if (c_msg.size < 0) {
       exit = true;
       LOG_INFO("Exiting");
-    } else {
-      launchSendRecvWait(task_queues, completion_queue, size, n_socks, send_buff, recv_buff, 0);
-
-      double end = timeMs();
-
-      LOG_INFO("size %d, time %f ms, bandwidth %f Gbps, start time %f", size, end - start, size * 8 / (end - start) / 1e6, start);
+      goto cleanup;
     }
+
+    int launch_tasks = 0;
+    for(int i = 0; i < c_msg.repeat; ++i){
+      launch_tasks += launchSendRecv(task_queues, completion_queue, c_msg.size, n_socks, send_buff, recv_buff, 0);
+
+      if (c_msg.latency > 0)
+        spinWait(c_msg.latency);
+    }
+
+    LOG_DEBUG("launched tasks %d", launch_tasks);
+    waitCompletion(launch_tasks * 2, completion_queue);
+    double end = timeMs();
+    LOG_INFO("size %d, time %f ms, bandwidth %f Gbps, start time %f", c_msg.size, end - start, c_msg.size * 8 / (end - start) / 1e6, start);
   }
 
+cleanup:
   cleanup(task_queues, socket_threads, send_buff, recv_buff);
 }
 
@@ -197,24 +225,33 @@ void clientMode(std::string& ip_str, int port) {
   char* send_buff = (char*)malloc(max_buffer);
   char* recv_buff = (char*)malloc(max_buffer);
 
+  CtrlMessage c_msg;
   while (!exit) {
-    int size;
-    ::recv(ctrl_fd, &size, sizeof(size), MSG_WAITALL);
+    ::recv(ctrl_fd, &c_msg, sizeof(c_msg), MSG_WAITALL);
 
     double start = timeMs();
-    if (size < 0) {
+    if (c_msg.size < 0) {
       exit = true;
       LOG_INFO("exiting");
-      continue;
-    } else {
-      launchSendRecvWait(task_queues, completion_queue, size, n_socks, send_buff, recv_buff, 1);
+      goto cleanup;
+    } 
 
-      double end = timeMs();
-      LOG_INFO("size %d, time %f ms, bandwidth %f Gbps, receive ctrl time %f", size, end - start, size * 8 / (end - start) / 1e6, start);
+    int launched_tasks = 0;
+    for (int i = 0; i < c_msg.repeat; ++i) {
+      launched_tasks += launchSendRecv(task_queues, completion_queue, c_msg.size, n_socks, send_buff, recv_buff, 1);
+
+      if (c_msg.latency > 0)
+        spinWait(c_msg.latency);
     }
 
+    LOG_DEBUG("launched tasks %d", launched_tasks);
+    waitCompletion(launched_tasks * 2, completion_queue);
+    double end = timeMs();
+    LOG_INFO("size %d, time %f ms, bandwidth %f Gbps, receive ctrl time %f",
+             c_msg.size, end - start, c_msg.size * 8 / (end - start) / 1e6, start);
   }
 
+cleanup:
   cleanup(task_queues, socket_threads, send_buff, recv_buff);
 }
 
