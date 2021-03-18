@@ -195,7 +195,9 @@ void serverMode(int port) {
     LOG_DEBUG("launched tasks %d", launch_tasks);
     waitCompletion(launch_tasks * 2, completion_queue);
     double end = timeMs();
-    LOG_INFO("size %d, time %f ms, bandwidth %f Gbps, start time %f", c_msg.size, end - start, c_msg.size * 8 / (end - start) / 1e6, start);
+    LOG_INFO("size %d, time %f ms, bandwidth %f Gbps, start time %f", 
+            c_msg.size * c_msg.repeat, end - start, 
+            c_msg.size * c_msg.repeat * 8 / (end - start) / 1e6, start);
   }
 
 cleanup:
@@ -248,7 +250,7 @@ void clientMode(std::string& ip_str, int port) {
     waitCompletion(launched_tasks * 2, completion_queue);
     double end = timeMs();
     LOG_INFO("size %d, time %f ms, bandwidth %f Gbps, receive ctrl time %f",
-             c_msg.size, end - start, c_msg.size * 8 / (end - start) / 1e6, start);
+             c_msg.size * c_msg.repeat, end - start, c_msg.size * c_msg.repeat * 8 / (end - start) / 1e6, start);
   }
 
 cleanup:
