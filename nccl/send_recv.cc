@@ -122,7 +122,7 @@ int main(int argc, char* argv[])
 
   int buffer_size = 256 *  1024 * 1024;
   float *sendbuff, *recvbuff, *result, *data_val;
-  cudaStream_t s;
+  cudaStream_t stream;
   
   data_val = (float*)malloc(buffer_size);
   result = (float*)malloc(buffer_size);
@@ -134,11 +134,19 @@ int main(int argc, char* argv[])
   //assign value to sendbuff
   CUDACHECK(cudaMemset(recvbuff, 0, buffer_size));
   CUDACHECK(cudaMemset(sendbuff, 0, buffer_size));
-  CUDACHECK(cudaStreamCreate(&s));
+  CUDACHECK(cudaStreamCreate(&stream));
 
-  cudaEvent_t start, stop;
-  cudaEventCreate(&start);
-  cudaEventCreate(&stop);
+  int n_repeat = 100;
+
+  std::vector<cudaEvent_t> start_events;
+  std::vector<cudaEvent_t> stop_events;
+  for (int i  = 0; i < n_repeat; ++i) {
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    start_events.push_back(start);
+    stop_events.push_back(stop);
+  }
   int warm_up = 5;
 
   for (int i = 0; i < 7; ++i) {
@@ -146,20 +154,24 @@ int main(int argc, char* argv[])
     size_t count = trans_bytes / sizeof(float);
     vector<float> time_costs;
 
-    for (int j = 0; j < 100; ++j) {
-      cudaEventRecord(start);
+    for (int j = 0; j < n_repeat; ++j) {
+      cudaEventRecord(start_events[j], stream);
       NCCLCHECK(ncclGroupStart());
-      NCCLCHECK(ncclSend(sendbuff, count, ncclFloat, next_peer, comm, s));
-      NCCLCHECK(ncclRecv(recvbuff, count, ncclFloat, pre_peer, comm, s));
+      NCCLCHECK(ncclSend(sendbuff, count, ncclFloat, next_peer, comm, stream));
+      NCCLCHECK(ncclRecv(recvbuff, count, ncclFloat, pre_peer, comm, stream));
       NCCLCHECK(ncclGroupEnd());
-      cudaEventRecord(stop);
+      cudaEventRecord(stop_events[j], stream);
+    }
+
+    cudaStreamSynchronize(stream);
+    for (int j=0; j < n_repeat; ++j) {
       //completing NCCL operation by synchronizing on the CUDA stream
-      CUDACHECK(cudaStreamSynchronize(s));
       float milliseconds = 0;
-      cudaEventElapsedTime(&milliseconds, start, stop);
+      cudaEventElapsedTime(&milliseconds, start_events[j], stop_events[j]);
       if (j >= warm_up) 
         time_costs.push_back(milliseconds);
     }
+    
     double avg = std::accumulate(time_costs.begin(), time_costs.end(), 0.0) / time_costs.size();
     printf("buffer size %zu, send&recv cost %f ms, bw %f Gbps\n", trans_bytes, avg, trans_bytes * 8 / avg / 1e6);
   }
