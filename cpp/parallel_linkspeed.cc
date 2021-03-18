@@ -177,6 +177,7 @@ void serverMode(int port) {
 
     double start = timeMs();
     LOG_IF_ERROR(::send(ctrl_fd, &c_msg, sizeof(c_msg), 0) != sizeof(c_msg), "send ctrl msg failed");
+    double after_send = timeMs();
 
     if (c_msg.size < 0) {
       exit = true;
@@ -191,13 +192,14 @@ void serverMode(int port) {
       if (c_msg.latency > 0)
         spinWait(c_msg.latency);
     }
+    double after_launch = timeMs();
 
     LOG_DEBUG("launched tasks %d", launch_tasks);
     waitCompletion(launch_tasks * 2, completion_queue);
     double end = timeMs();
-    LOG_INFO("size %d, time %f ms, bandwidth %f Gbps, start time %f", 
+    LOG_INFO("size %d, time %f ms, bandwidth %f Gbps, start time %f, send ctrl cost %f ms, launch time %f ms, wait %f ms", 
             c_msg.size * c_msg.repeat, end - start, 
-            c_msg.size * c_msg.repeat * 8 / (end - start) / 1e6, start);
+            c_msg.size * c_msg.repeat * 8 / (end - start) / 1e6, start, after_send - start, after_launch - after_send, end - after_launch);
   }
 
 cleanup:

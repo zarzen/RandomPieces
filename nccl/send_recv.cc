@@ -139,8 +139,9 @@ int main(int argc, char* argv[])
   cudaEvent_t start, stop;
   cudaEventCreate(&start);
   cudaEventCreate(&stop);
+  int warm_up = 5;
 
-  for (int i = 0; i < 9; ++i) {
+  for (int i = 0; i < 7; ++i) {
     size_t trans_bytes = (size_t) pow(2, i) * 1024 * 1024;
     size_t count = trans_bytes / sizeof(float);
     vector<float> time_costs;
@@ -156,7 +157,8 @@ int main(int argc, char* argv[])
       CUDACHECK(cudaStreamSynchronize(s));
       float milliseconds = 0;
       cudaEventElapsedTime(&milliseconds, start, stop);
-      time_costs.push_back(milliseconds);
+      if (j >= warm_up) 
+        time_costs.push_back(milliseconds);
     }
     double avg = std::accumulate(time_costs.begin(), time_costs.end(), 0.0) / time_costs.size();
     printf("buffer size %zu, send&recv cost %f ms, bw %f Gbps\n", trans_bytes, avg, trans_bytes * 8 / avg / 1e6);
