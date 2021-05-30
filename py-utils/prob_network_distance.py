@@ -17,13 +17,13 @@ def get_args():
     parser.add_argument(
         "--output-dir", help="directory folder to save bandwidth logs", default="./logs")
     parser.add_argument(
-        "--provider", help="network provider e.g., socket/efa", type=str)
+        "--provider", help="network provider e.g., socket/efa", default="sockets", type=str)
     parser.add_argument(
         "--fabtests-path", help="the location of fabtests", default="/opt/fabtests")
     parser.add_argument("--libfabric-path", default="/opt/amazon/efa",
                         help="path of libfabric, used for building fabtests")
     parser.add_argument(
-        '--bin', help="the fabtest binary to use", default="fi_")
+        '--bin', help="the fabtest binary to use", default="fi_rdm_tagged_bw")
 
     return parser.parse_args()
 
@@ -38,8 +38,8 @@ def print_output(output):
 def build_fabtests(args, client):
     """"""
     build_cmds = [
-        "git clone --recursive https://github.com/ofiwg/libfabric.git /tmp",
-        "cd /tmp/libfabric",
+        "git clone --recursive https://github.com/ofiwg/libfabric.git /tmp/libfabric",
+        "cd /tmp/libfabric/fabtests",
         "git checkout v1.11.1",
         "./autogen.sh --with-libfabric={}".format(args.libfabric_path),
         "./configure --with-libfabric={} --prefix={}".format(
@@ -48,9 +48,9 @@ def build_fabtests(args, client):
         "sudo make install"
     ]
 
-    cmd = "&&".join(build_cmds)
+    cmd = " && ".join(build_cmds)
     print('Build fabtests with command: %s' % (cmd, ))
-    output = client.run_command(cmd, ues_pty=True, shell='bash -c')
+    output = client.run_command(cmd, use_pty=True, shell='bash -c')
 
     print_output(output)
     print(f"{output.host} :: exit {output.exit_code}")
@@ -64,7 +64,7 @@ def check_fabtests(args, client):
     assume the libfabric is available, which is installed by Deep Learning AMI
     """
     cmd = f"ls {args.fabtests_path}"
-    output = client.run_command(cmd)
+    output = client.run_command(cmd, use_pty=True, shell='bash -c')
     print_output(output)
 
     require_build_fabtests = False
@@ -76,6 +76,10 @@ def check_fabtests(args, client):
 
 def save_output(output, filename):
     """"""
+    file_folder = os.path.dirname(filename)
+    if not os.path.exists(file_folder):
+        os.makedirs(file_folder)
+
     with open(filename, 'w') as out_file:
         for line in output.stdout:
             out_file.write(f"{line}\n")
@@ -90,8 +94,8 @@ def benchmark_bandwidth(args, clients, node_ip1, node_ip2):
 
     bin_path = os.path.join(args.fabtests_path, "bin", args.bin)
 
-    server_cmd = f"{bin_path} -m"
-    client_cmd = f"{bin_path} -m {node_ip1}"
+    server_cmd = f"{bin_path} -m -s 0.0.0.0 -p {args.provider}"
+    client_cmd = f"{bin_path} -m {node_ip1} -p {args.provider}"
 
     def exec_cmd(cli, cmd, filename):
         output = cli.run_command(cmd)
