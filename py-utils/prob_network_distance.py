@@ -94,8 +94,8 @@ def benchmark_bandwidth(args, clients, node_ip1, node_ip2):
 
     bin_path = os.path.join(args.fabtests_path, "bin", args.bin)
 
-    server_cmd = f"{bin_path} -m -s 0.0.0.0 -p {args.provider}"
-    client_cmd = f"{bin_path} -m {node_ip1} -p {args.provider}"
+    server_cmd = f"{bin_path} -m -w 10 -S all -p {args.provider} -s 0.0.0.0"
+    client_cmd = f"{bin_path} -m -w 10 -S all -p {args.provider} {node_ip1} "
 
     def exec_cmd(cli, cmd, filename):
         output = cli.run_command(cmd)
