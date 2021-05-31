@@ -7,6 +7,7 @@ import argparse
 from pssh.clients.native.single import SSHClient
 import threading
 import os
+import time
 
 
 def get_args():
@@ -87,6 +88,32 @@ def save_output(output, filename):
         for line in output.stderr:
             out_file.write(f"{line}\n")
 
+def cleanup_old_proc(cli, bin_path):
+    def proc_check(cli, bin_path):
+        status_check_cmd = f"ps aux | grep {bin_path}"
+        output = cli.run_command(status_check_cmd, use_pty=True, shell="bash -c")
+        cnt_output = 0
+        for line in output.stdout:
+            if f"grep {bin_path}" in line:
+                pass
+            else:
+                cnt_output += 1
+            print(f"{cli.host} :: old proc check {line}")
+
+        if cnt_output >= 1:
+            print(f"{cli.host} has old proc {bin_path}")
+            return False
+        else:
+            return True
+
+    kill_proc_cmd = f"pkill -9 -f \"{bin_path}\""
+    while not proc_check(cli, bin_path):
+        print(f"{cli.host} :: killing old proc with command {kill_proc_cmd} ")
+        output = cli.run_command(kill_proc_cmd)
+        print_output(output)
+        print(f"{cli.host} exit code {output.exit_code}")
+    
+
 def benchmark_bandwidth(args, clients, node_ip1, node_ip2):
     """"""
     c1 = clients[node_ip1] # server
@@ -94,8 +121,12 @@ def benchmark_bandwidth(args, clients, node_ip1, node_ip2):
 
     bin_path = os.path.join(args.fabtests_path, "bin", args.bin)
 
-    server_cmd = f"{bin_path} -m -w 10 -S all -p {args.provider} -s 0.0.0.0"
-    client_cmd = f"{bin_path} -m -w 10 -S all -p {args.provider} {node_ip1} "
+    if args.provider == "efa":
+        server_cmd = f"{bin_path} -m -w 10 -S all -p {args.provider} -E"
+        client_cmd = f"{bin_path} -m -w 10 -S all -p {args.provider} -E {node_ip1}"
+    else:
+        server_cmd = f"{bin_path} -m -w 10 -S all -p {args.provider} -s 0.0.0.0"
+        client_cmd = f"{bin_path} -m -w 10 -S all -p {args.provider} {node_ip1}"
 
     def exec_cmd(cli, cmd, filename):
         output = cli.run_command(cmd)
@@ -104,10 +135,17 @@ def benchmark_bandwidth(args, clients, node_ip1, node_ip2):
         else:
             print_output(output)
 
-        print(f"cmd :: {cmd} exit code {output.exit_code}")
+        print(f"{cli.host} :: cmd :: {cmd} exit code: {output.exit_code}")
+    
+    print("cleaning existing processes")
+    cleanup_old_proc(c1, bin_path)
+    cleanup_old_proc(c2, bin_path)
 
     server_thd = threading.Thread(target=exec_cmd, args=(c1, server_cmd, None))
     server_thd.start()
+
+    # make sure server started
+    time.sleep(1)
 
     log_file = os.path.join(args.output_dir, f"{node_ip2}_{node_ip1}.log")
     client_thd = threading.Thread(target=exec_cmd, args=(c2, client_cmd, log_file))
@@ -148,6 +186,7 @@ def main():
         for ip2 in clients:
             if ip1 != ip2:
                 benchmark_bandwidth(args, clients, ip1, ip2)
+                time.sleep(2)
 
 
 if __name__ == "__main__":
