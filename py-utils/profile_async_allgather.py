@@ -7,8 +7,10 @@ import torch
 import numpy as np
 from torch import distributed as dist
 from torch.cuda import nvtx
+import time
 
-from torch.distributed.distributed_c10d import all_gather
+from torch.distributed.distributed_c10d import all_gather, _batch_p2p_manager, get_backend
+
 
 def print_at_rank0(msg):
     if dist.get_rank() == 0:
@@ -16,52 +18,64 @@ def print_at_rank0(msg):
 
 
 
-def benchmark_all_gather(partition_sizes, local_params):
+def benchmark_all_gather(partition_sizes, local_params, comm_stream):
     dtype = torch.half
     
     world_size = dist.get_world_size()
     rank = dist.get_rank()
     device_id = rank % torch.cuda.device_count()
 
-    nvtx.range_push('allocate final params')
-    # allocate memories
-    allgather_params = []
-    for psize in partition_sizes:
-        tensor_size = psize * world_size
-        tensor = torch.zeros(tensor_size, dtype=dtype, device=f'cuda:{device_id}').view(-1)
-        allgather_params.append(tensor)
+    t1 = time.time()
+    with torch.cuda.stream(comm_stream):
+        nvtx.range_push('allocate final params')
+        # allocate memories
+        allgather_params = []
+        for psize in partition_sizes:
+            tensor_size = psize * world_size
+            tensor = torch.empty(tensor_size, dtype=dtype, device=f'cuda:{device_id}').view(-1)
+            allgather_params.append(tensor)
 
-    nvtx.range_pop()
+        nvtx.range_pop()
+    comm_stream.synchronize()
+    t2 = time.time()
+    print_at_rank0(f'allocate cost {t2 - t1} s')
 
-    nvtx.range_push('copy into final tensor')
-    # create allgather parameters
-    all_gather_list_list = []
-    for pidx, psize in enumerate(partition_sizes):
-        flat_tensor = allgather_params[pidx]
-        partitions = []
-        for i in range(world_size):
-            partitions.append(flat_tensor.narrow(0, psize * i, psize))
+    with torch.cuda.stream(comm_stream):
+        nvtx.range_push('copy into final tensor')
+        # create allgather parameters
+        all_gather_list_list = []
+        for pidx, psize in enumerate(partition_sizes):
+            flat_tensor = allgather_params[pidx]
+            partitions = []
+            for i in range(world_size):
+                partitions.append(flat_tensor.narrow(0, psize * i, psize))
 
-            if i == rank:
-                partitions[i].data.copy_(local_params[pidx].data, non_blocking=True)
+                if i == rank:
+                    partitions[i].data.copy_(local_params[pidx].data, non_blocking=True)
 
-        all_gather_list_list.append(partitions)
+            all_gather_list_list.append(partitions)
 
-    nvtx.range_pop()
+        nvtx.range_pop()
 
-    nvtx.range_push('launch dist all-gather')
-    handles = []    
-    for pidx, psize in enumerate(partition_sizes):
-        h = dist.all_gather(all_gather_list_list[pidx], 
-            all_gather_list_list[pidx][rank], async_op=True)
-        handles.append(h)
+    comm_stream.synchronize()
+    print_at_rank0(f'copy cost {time.time() - t2} s')
 
-    handles[-1].wait() # event enqueued, but not guaranteed complete
-    nvtx.range_pop()
+    with torch.cuda.stream(comm_stream):
+        backend = get_backend()
+        nvtx.range_push('launch dist all-gather')
 
-    end_event = torch.cuda.Event()
-    end_event.synchronize()
+        with _batch_p2p_manager(backend):
+            handles = []    
+            for pidx, psize in enumerate(partition_sizes):
+                h = all_gather(all_gather_list_list[pidx], 
+                                all_gather_list_list[pidx][rank], 
+                                async_op=True)
+                handles.append(h)
 
+        # handles[-1].wait() # event enqueued, but not guaranteed complete
+        nvtx.range_pop()
+
+    comm_stream.synchronize()
     return allgather_params
 
 def main():
@@ -70,7 +84,7 @@ def main():
     rank = dist.get_rank()
     torch.cuda.set_device(rank % local_size)
     torch.cuda.synchronize()
-    comm_stream = torch.cuda.Stream()
+    comm_stream = torch.cuda.Stream(rank % local_size)
     device_id = rank % local_size
     # print(f'rank {rank}')
     warm_up = 5
@@ -101,10 +115,13 @@ def main():
     ts = []
     for i in range(repeat + warm_up):
         with torch.cuda.stream(comm_stream):
+            nvtx.range_push(f'exp-{i}')
             start_event.record()
-            benchmark_all_gather(partition_sizes, local_params)
+            benchmark_all_gather(partition_sizes, local_params, comm_stream)
             end_event.record()
             end_event.synchronize()
+
+            nvtx.range_pop()
 
         if i >= warm_up:
             ts.append(start_event.elapsed_time(end_event))
