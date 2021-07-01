@@ -10,6 +10,7 @@ from torch.cuda import nvtx
 import time
 
 from torch.distributed.distributed_c10d import all_gather, _batch_p2p_manager, get_backend
+from torch.distributed.distributed_c10d import _get_default_group, _pg_names
 
 
 def print_at_rank0(msg):
@@ -38,10 +39,10 @@ def benchmark_all_gather(partition_sizes, local_params, comm_stream):
         nvtx.range_pop()
     comm_stream.synchronize()
     t2 = time.time()
-    print_at_rank0(f'allocate cost {t2 - t1} s')
+    # print_at_rank0(f'allocate cost {t2 - t1} s')
 
     with torch.cuda.stream(comm_stream):
-        nvtx.range_push('copy into final tensor')
+        nvtx.range_push('construct all output list')
         # create allgather parameters
         all_gather_list_list = []
         for pidx, psize in enumerate(partition_sizes):
@@ -50,15 +51,12 @@ def benchmark_all_gather(partition_sizes, local_params, comm_stream):
             for i in range(world_size):
                 partitions.append(flat_tensor.narrow(0, psize * i, psize))
 
-                if i == rank:
-                    partitions[i].data.copy_(local_params[pidx].data, non_blocking=True)
-
             all_gather_list_list.append(partitions)
 
         nvtx.range_pop()
 
     comm_stream.synchronize()
-    print_at_rank0(f'copy cost {time.time() - t2} s')
+    print_at_rank0(f'construct params cost {time.time() - t2} s')
 
     with torch.cuda.stream(comm_stream):
         backend = get_backend()
@@ -70,16 +68,47 @@ def benchmark_all_gather(partition_sizes, local_params, comm_stream):
                 h = all_gather(all_gather_list_list[pidx], 
                                 all_gather_list_list[pidx][rank], 
                                 async_op=True)
+                # h = dist.all_gather(all_gather_list_list[pidx], 
+                #                 all_gather_list_list[pidx][rank], 
+                #                 async_op=True)
+
                 handles.append(h)
+        
+        # handles=[]
+        # for pidx, psize in enumerate(partition_sizes):
+        #     # h = all_gather(all_gather_list_list[pidx], 
+        #     #                 all_gather_list_list[pidx][rank], 
+        #     #                 async_op=True)
+        #     h = dist.all_gather(all_gather_list_list[pidx], 
+        #                     local_params[pidx], 
+        #                     async_op=True)
+        #     handles.append(h)
+        #     # torch.cuda.synchronize()
 
         # handles[-1].wait() # event enqueued, but not guaranteed complete
         nvtx.range_pop()
 
-    comm_stream.synchronize()
-    return allgather_params
+    torch.cuda.synchronize()
+    end_event = torch.cuda.Event()
+    comm_stream.wait_event(end_event)
+    return None
 
 def main():
+    # c10d_frontend = torch.classes.dist_c10d.frontend()
+
     dist.init_process_group(backend='nccl')
+    d_pg = _get_default_group()
+    # print(c10d_frontend.get_name_of_process_group(d_pg))
+
+    pg2 = dist.new_group([0,1], backend='nccl')
+    # print(c10d_frontend.get_name_of_process_group(pg2))
+    if dist.get_rank() == 0:
+        print(dir(d_pg))
+        print(type(d_pg))
+        print(type(pg2))
+        print(dir(dist))
+        print(_pg_names)
+
     local_size = torch.cuda.device_count()
     rank = dist.get_rank()
     torch.cuda.set_device(rank % local_size)
@@ -109,22 +138,26 @@ def main():
     for psize in partition_sizes:
         r = torch.rand(psize, dtype=torch.half, device=f'cuda:{device_id}').view(-1)
         local_params.append(r)
-    
+        print(f'rank {rank}, psize {psize}, sum {torch.sum(r).item()}')
+
     start_event = torch.cuda.Event(enable_timing=True)
     end_event = torch.cuda.Event(enable_timing=True) 
     ts = []
     for i in range(repeat + warm_up):
         with torch.cuda.stream(comm_stream):
             nvtx.range_push(f'exp-{i}')
-            start_event.record()
+            t1 = time.time()
+            # start_event.record(stream=comm_stream)
             benchmark_all_gather(partition_sizes, local_params, comm_stream)
-            end_event.record()
-            end_event.synchronize()
+            # end_event.record(stream=comm_stream)
+            # end_event.synchronize()
 
+            t2 = time.time()
             nvtx.range_pop()
 
-        if i >= warm_up:
-            ts.append(start_event.elapsed_time(end_event))
+            if i >= warm_up:
+                # ts.append(start_event.elapsed_time(end_event))
+                ts.append((t2 - t1) * 1e3)
     
     if dist.get_rank() == 0:
         avg_t = np.mean(ts)

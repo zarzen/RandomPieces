@@ -7,12 +7,12 @@ import time
 def main():
     """"""
     current_env = os.environ.copy()
-    nGPUs = 8
+    nGPUs = 4
     current_env['MASTER_ADDR'] = '127.0.0.1'
     current_env['MASTER_PORT'] = '7890'
     current_env['WORLD_SIZE'] = str(nGPUs)
 
-    profile = True
+    profile = False
 
     cmd = [
         sys.executable,
