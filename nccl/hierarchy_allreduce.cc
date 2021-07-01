@@ -23,6 +23,11 @@ void init_nccl_communicators() {
       ncclGetUniqueId(&id);
       ids.push_back(id);
     }
+  } else {
+    for (int i = 0; i < ngroups; ++i) {
+      ncclUniqueId id; // place hold
+      ids.push_back(id);
+    }
   }
 
   MPICHECK(MPI_Bcast(ids.data(), sizeof(ncclUniqueId) * ngroups, MPI_BYTE, 0,
@@ -140,6 +145,7 @@ int main(int argc, char* argv[]) {
   device_idx = rank % local_size;
   local_rank = device_idx;
   nsub_groups = nranks / local_size;
+  printf("rank %d, nranks %d, local_size %d, device_idx %d, local_rank %d, nsub %d\n", rank, nranks, local_size, device_idx, local_rank, nsub_groups);
 
   nelem = std::stoi(argv[2]);
   buffer_size =  nelem * sizeof(float);
