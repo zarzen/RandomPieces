@@ -12,43 +12,56 @@ int device_idx;
 int nsub_groups;
 
 ncclComm_t world_comm; // for all ranks
-ncclComm_t group_comm; // only for local_rank=0
+ncclComm_t group_comm; // for ranks has same local_rank
 ncclComm_t local_comm; // inside each group
 void init_nccl_communicators() {
-  int ngroups = nsub_groups + 2;
+  int world_size = nranks;
+  int my_rank = rank; // avoid compiler optimization 
+  cudaSetDevice(device_idx);
+  printf("nranks %d, rank %d, device %d \n", nranks, rank, device_idx);
+
+  int n_unique_ids = nsub_groups + local_size + 1;
   std::vector<ncclUniqueId> ids;
   if (rank == 0) {
-    for (int i = 0; i < ngroups; ++i) {
+    for (int i = 0; i < n_unique_ids; ++i) {
       ncclUniqueId id;
       ncclGetUniqueId(&id);
       ids.push_back(id);
     }
   } else {
-    for (int i = 0; i < ngroups; ++i) {
+    for (int i = 0; i < n_unique_ids; ++i) {
       ncclUniqueId id; // place hold
       ids.push_back(id);
     }
   }
 
-  MPICHECK(MPI_Bcast(ids.data(), sizeof(ncclUniqueId) * ngroups, MPI_BYTE, 0,
+  MPICHECK(MPI_Bcast(ids.data(), sizeof(ncclUniqueId) * n_unique_ids, MPI_BYTE, 0,
                      MPI_COMM_WORLD));
 
-  cudaSetDevice(device_idx);
-
-  // use first id to init world_comm
-  NCCLCHECK(ncclCommInitRank(&world_comm, nranks, ids[0], rank));
+  //initializing NCCL
+  NCCLCHECK(ncclCommInitRank(&world_comm, world_size, ids[0], my_rank));
   printf("Init global communicator, size %d, rank %d\n", nranks, rank);
 
-  int group_idx = rank / nsub_groups;
-  NCCLCHECK(ncclCommInitRank(&group_comm, nsub_groups, ids[1], group_idx));
-  printf("Init group communicator\n");
+  if (nsub_groups > 1) {
+    // local communication
+    int my_local_rank = local_rank;  // avoid compiler optimization
+    int my_local_size = local_size;
+    int sub_group_idx = my_rank / local_size;
+    ncclUniqueId local_group_id = ids[sub_group_idx + 1];
+    NCCLCHECK(ncclCommInitRank(&local_comm, my_local_size, local_group_id,
+                               my_local_rank));
+    printf(
+        "Init local communicator, local_size %d, local_rank %d\n, global_rank "
+        "%d",
+        local_size, local_rank, rank);
 
-  ncclUniqueId local_group_id = ids[group_idx+2];
-  NCCLCHECK(
-      ncclCommInitRank(&local_comm, local_size, local_group_id, local_rank));
-  printf(
-      "Init local communicator, local_size %d, local_rank %d\n, global_rank %d",
-      local_size, local_rank, rank);
+    // group communicator for ranks have same local_rank
+    int my_group_size = nsub_groups;
+    ncclUniqueId group_nccl_id = ids[1 + my_group_size + my_local_rank];
+    NCCLCHECK(ncclCommInitRank(&group_comm, my_group_size, group_nccl_id,
+                               my_rank / local_size));
+  }
+  
 }
 
 void* gpu_buffer;
@@ -89,9 +102,9 @@ void allreduce_global(int warm_up=5, int repeat=10) {
   printf("ring allreduce on global buffer size %lu, bw %f GB/s \n", buffer_size, bw);
 }
 
-// reduce in local groups 
-// allreduce among groups
-// bcast in local groups
+// reduce-scatter in local groups 
+// allreduce among groups, but with only sharded GPUs
+// allgather in local groups
 void allreduce_hierarchy(int warm_up=5, int repeat=10) {
   cudaStream_t stream;
   CUDACHECK(cudaStreamCreate(&stream));
@@ -155,5 +168,14 @@ int main(int argc, char* argv[]) {
 
   allreduce_global();
 
-  allreduce_hierarchy();
+  if (nsub_groups > 1)
+    allreduce_hierarchy();
+
+  ncclCommDestroy(world_comm);
+  if (nsub_groups > 1) {
+    ncclCommDestroy(local_comm);
+    ncclCommDestroy(group_comm);
+  }
+  //finalizing MPI
+  MPICHECK(MPI_Finalize());
 }
