@@ -3,6 +3,7 @@
 #include <string>
 #include <iostream>
 #include <vector>
+#include <assert.h>
 
 int rank;
 int nranks;
@@ -113,21 +114,24 @@ void allreduce_hierarchy(int warm_up=5, int repeat=10) {
   cudaEventCreate(&start);
   cudaEventCreate(&stop);
 
+  size_t chunk_nelem = nelem / local_size;
+  size_t chunk_size = buffer_size / local_size;
+
   float avg_time = 0;
   for (int i = 0; i < warm_up + repeat; ++i) {
     cudaEventRecord(start, stream);
-    // local reduce to local_rank = 0
-    NCCLCHECK(ncclReduce(gpu_buffer, gpu_buffer, nelem, ncclFloat32, ncclSum, 0,
-                         local_comm, stream));
-    if (local_rank == 0) {
-      // all reduce among groups
-      NCCLCHECK(ncclAllReduce(gpu_buffer, gpu_buffer, nelem, ncclFloat32,
-                              ncclSum, group_comm, stream));
-    }
-
-    // bcast back to local
-    NCCLCHECK(ncclBroadcast(gpu_buffer, gpu_buffer, nelem, ncclFloat32, 0,
+    void* send_buff = gpu_buffer;
+    void* recv_buff = (char*)gpu_buffer + chunk_size * local_rank;
+    // reduce scatter onto all GPUs
+    NCCLCHECK(ncclReduceScatter(send_buff, recv_buff, chunk_nelem, ncclFloat32,
+                                ncclSum, local_comm, stream));
+    // allreduce each chunk
+    NCCLCHECK(ncclAllReduce(recv_buff, recv_buff, chunk_nelem, ncclFloat32,
+                            ncclSum, group_comm, stream));
+    // allgather allreduced results from all local GPUs
+    NCCLCHECK(ncclAllGather(recv_buff, gpu_buffer, chunk_nelem, ncclFloat32,
                             local_comm, stream));
+
     cudaEventRecord(stop, stream);
 
     cudaStreamSynchronize(stream);
@@ -162,6 +166,8 @@ int main(int argc, char* argv[]) {
 
   nelem = std::stoi(argv[2]);
   buffer_size =  nelem * sizeof(float);
+  size_t chunk_nelem = nelem / local_size;
+  assert(chunk_nelem * local_size == nelem); // can be equally partitioned
 
   init_nccl_communicators();
   init_buffers();
