@@ -1,7 +1,7 @@
 #!/bin/bash
 
-NP=4
-HOSTS="127.0.0.1:4"
+NP=8
+HOSTS="172.31.6.51:4,172.31.24.30:4"
 MPI_HOME="/opt/amazon/openmpi"
 TEST_BIN="/home/ec2-user/RandomPieces/nccl/allreduce.bin"
 
@@ -15,7 +15,7 @@ cmd="${MPI_BIN} -np ${NP} \
         -bind-to none -map-by slot \
         -x PATH \
         -x NCCL_SOCKET_IFNAME=eth0 \
-        -x NCCL_DEBUG=INFO \
+        -x NCCL_DEBUG=DEBUG \
         -x NCCL_TREE_THRESHOLD=0 \
         -x LD_LIBRARY_PATH=${LD_LIBRARY_PATH} \
         -mca btl ^openib \

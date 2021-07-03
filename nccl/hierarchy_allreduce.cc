@@ -53,7 +53,7 @@ void init_nccl_communicators() {
                                my_local_rank));
     printf(
         "Init local communicator, local_size %d, local_rank %d\n, global_rank "
-        "%d",
+        "%d \n",
         local_size, local_rank, rank);
 
     // group communicator for ranks have same local_rank
@@ -61,6 +61,8 @@ void init_nccl_communicators() {
     ncclUniqueId group_nccl_id = ids[1 + my_group_size + my_local_rank];
     NCCLCHECK(ncclCommInitRank(&group_comm, my_group_size, group_nccl_id,
                                my_rank / local_size));
+    printf("Init cross node group communicator, group_size %d, group_rank %d\n",
+           my_group_size, my_rank / local_size);
   }
   
 }
@@ -100,7 +102,8 @@ void allreduce_global(int warm_up=5, int repeat=10) {
   }
   float ratio = 2 * (float(nranks) - 1) / float(nranks);
   float bw = ratio * buffer_size / 1e9 / (avg_time * 1e-3);
-  printf("ring allreduce on global buffer size %lu, bw %f GB/s \n", buffer_size, bw);
+  if (rank == 0)
+    printf("flat ring allreduce on global buffer size %lu, bw %f GB/s \n", buffer_size, bw);
 }
 
 // reduce-scatter in local groups 
@@ -144,7 +147,8 @@ void allreduce_hierarchy(int warm_up=5, int repeat=10) {
 
   float ratio = 2 * (float(nsub_groups) - 1) / float(nsub_groups);
   float bw = ratio * buffer_size / 1e9 / (avg_time * 1e-3);
-  printf("ring allreduce on global buffer size %lu, bw %f GB/s \n", buffer_size, bw);
+  if (rank == 0)
+    printf("hierarchy allreduce on global buffer size %lu, bw %f GB/s \n", buffer_size, bw);
 
 }
 
