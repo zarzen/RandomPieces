@@ -4,6 +4,7 @@
 #include <iostream>
 #include <vector>
 #include <assert.h>
+#include <cstdlib>
 
 int rank;
 int nranks;
@@ -100,10 +101,22 @@ void allreduce_global(int warm_up=5, int repeat=10) {
     cudaEventElapsedTime(&_cost, start, stop);
     avg_time += (_cost / float(repeat));
   }
+
   float ratio = 2 * (float(nranks) - 1) / float(nranks);
+  if (const char* env_p = std::getenv("NCCL_ALGO")) {
+    std::string nccl_algo(env_p);
+    if (nccl_algo == "Tree") {
+      ratio = 1;
+    } else if (nccl_algo == "Ring") {
+    } else {
+      if (rank == 0)
+        printf("ratio not changed by NCCL_ALGO env var %d\n", env_p);
+    }
+  }
+
   float bw = ratio * buffer_size / 1e9 / (avg_time * 1e-3);
   if (rank == 0)
-    printf("flat ring allreduce on global buffer size %lu, bw %f GB/s \n", buffer_size, bw);
+    printf("flat ring allreduce on global buffer size %lu, bw %f GB/s, avg time %f ms \n", buffer_size, bw, avg_time);
 }
 
 // reduce-scatter in local groups 
@@ -113,14 +126,17 @@ void allreduce_hierarchy(int warm_up=5, int repeat=10) {
   cudaStream_t stream;
   CUDACHECK(cudaStreamCreate(&stream));
 
-  cudaEvent_t start, stop;
+  cudaEvent_t start, stop, allreduce_start, allreduce_stop;
   cudaEventCreate(&start);
   cudaEventCreate(&stop);
+  cudaEventCreate(&allreduce_start);
+  cudaEventCreate(&allreduce_stop);
 
   size_t chunk_nelem = nelem / local_size;
   size_t chunk_size = buffer_size / local_size;
 
   float avg_time = 0;
+  float avg_allreduce_time = 0;
   for (int i = 0; i < warm_up + repeat; ++i) {
     cudaEventRecord(start, stream);
     void* send_buff = gpu_buffer;
@@ -128,9 +144,12 @@ void allreduce_hierarchy(int warm_up=5, int repeat=10) {
     // reduce scatter onto all GPUs
     NCCLCHECK(ncclReduceScatter(send_buff, recv_buff, chunk_nelem, ncclFloat32,
                                 ncclSum, local_comm, stream));
+    CUDACHECK(cudaEventRecord(allreduce_start, stream));
     // allreduce each chunk
     NCCLCHECK(ncclAllReduce(recv_buff, recv_buff, chunk_nelem, ncclFloat32,
                             ncclSum, group_comm, stream));
+    CUDACHECK(cudaEventRecord(allreduce_stop, stream));
+
     // allgather allreduced results from all local GPUs
     NCCLCHECK(ncclAllGather(recv_buff, gpu_buffer, chunk_nelem, ncclFloat32,
                             local_comm, stream));
@@ -138,18 +157,25 @@ void allreduce_hierarchy(int warm_up=5, int repeat=10) {
     cudaEventRecord(stop, stream);
 
     cudaStreamSynchronize(stream);
-    float _cost= 0;
+    float _cost = 0;
+    float _allreduce_cost = 0;
     cudaEventElapsedTime(&_cost, start, stop);
+    CUDACHECK(cudaEventElapsedTime(&_allreduce_cost, allreduce_start, allreduce_stop));
+
     if (i >= warm_up) {
       avg_time += (_cost / float(repeat));
+      avg_allreduce_time += (_allreduce_cost / float(repeat));
     }
   }
 
   float ratio = 2 * (float(nsub_groups) - 1) / float(nsub_groups);
-  float bw = ratio * buffer_size / 1e9 / (avg_time * 1e-3);
-  if (rank == 0)
-    printf("hierarchy allreduce on global buffer size %lu, bw %f GB/s \n", buffer_size, bw);
+  float bw = ratio * buffer_size / 1e9 / (avg_allreduce_time * 1e-3);
 
+  if (rank == 0)
+    printf(
+        "hierarchy: inter-node allreduce on buffer size %lu, bw %f GB/s, avg "
+        "total time %f ms, avg inter-allreduce time %f ms \n",
+        buffer_size, bw, avg_time, avg_allreduce_time);
 }
 
 int main(int argc, char* argv[]) {
