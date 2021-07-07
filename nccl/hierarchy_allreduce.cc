@@ -106,7 +106,9 @@ void allreduce_global(int warm_up=5, int repeat=10) {
   if (const char* env_p = std::getenv("NCCL_ALGO")) {
     std::string nccl_algo(env_p);
     if (nccl_algo == "Tree") {
-      ratio = 1;
+      float n_nodes = nranks / local_size;
+      ratio = 2 * (n_nodes - 1) / n_nodes;
+      printf("ratio %f, nnodes %f \n", ratio, n_nodes);
     } else if (nccl_algo == "Ring") {
     } else {
       if (rank == 0)

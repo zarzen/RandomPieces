@@ -1,7 +1,7 @@
 #!/bin/bash
 
-NP=16
-HOSTS="172.31.9.0:8,172.31.12.234:8"
+NP=32
+HOSTS="172.31.9.0:8,172.31.12.234:8,172.31.2.94:8,172.31.2.168:8"
 MPI_HOME="/opt/amazon/openmpi"
 TEST_BIN="/home/ec2-user/RandomPieces/nccl/allreduce.bin"
 
@@ -14,13 +14,13 @@ cmd="${MPI_BIN} -np ${NP} \
         -tag-output \
         -bind-to none -map-by slot \
         -x PATH \
-        -x NCCL_ALGO=Ring \
         -x FI_EFA_USE_DEVICE_RDMA=1 \
         -x RDMAV_FORK_SAFE=1 \
         -x FI_PROVIDER=\"efa\" \
-        -x NCCL_SOCKET_IFNAME=eth0 \
-        -x NCCL_DEBUG=INFO \
-        -x NCCL_TREE_THRESHOLD=0 \
+        -x NCCL_SOCKET_IFNAME=eth \
+        -x NCCL_DEBUG=DEBUG \
+        -x NCCL_ALGO=Tree \
+        -x NCCL_MIN_NCHANNELS=8 \
         -x LD_LIBRARY_PATH=${LD_LIBRARY_PATH} \
         -mca btl ^openib \
         -mca pml ob1 \
