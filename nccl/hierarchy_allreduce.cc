@@ -18,6 +18,20 @@ int local_size;
 int device_idx;
 int nsub_groups;
 
+int size_of_dtype(ncclDataType_t dtype) {
+  switch (dtype)
+  {
+  case ncclFloat32:
+    return 4;
+  case ncclFloat16:
+    return 2;
+  default:
+    std::cerr << "unsupported data type\n";
+    return -1;
+    break;
+  }
+}
+
 ncclComm_t world_comm; // for all ranks
 ncclComm_t group_comm; // for ranks has same local_rank
 ncclComm_t local_comm; // inside each group
@@ -230,20 +244,21 @@ struct coll_task {
 
   // different stage has different send/recv buffer
   void compute_send_recv(int local_rank, int local_size) {
+    int coll_buff_size = this->coll_count * size_of_dtype(this->dtype);
     switch (this->stage) {
       case 0:  // intra reduce scatter
         this->send_buff = this->buff;
         this->coll_count = this->count / local_size;
-        this->recv_buff = (char*)this->buff + this->coll_count * local_rank;
+        this->recv_buff = (char*)this->buff + coll_buff_size * local_rank;
         break;
       case 1:                                         // inplace all-reduce
         this->coll_count = this->count / local_size;  // assume dividable
-        this->send_buff = (char*)this->buff + this->coll_count * local_rank;
+        this->send_buff = (char*)this->buff + coll_buff_size * local_rank;
         this->recv_buff = this->send_buff;
         break;
       case 2:
         this->coll_count = this->count / local_size;
-        this->send_buff = (char*)this->buff + this->coll_count * local_rank;
+        this->send_buff = (char*)this->buff + coll_buff_size * local_rank;
         this->recv_buff = this->buff;
         break;
       default:
