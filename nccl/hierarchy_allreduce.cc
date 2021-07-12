@@ -267,25 +267,25 @@ struct coll_task {
   }
 };
 
-void launch_coll(coll_task& t, ncclComm_t& comm, cudaStream_t& stream) {
-  t.compute_send_recv(local_rank, local_size);
-
-  switch(t.stage) {
+void launch_coll(coll_task* t, ncclComm_t& comm, cudaStream_t& stream) {
+  t->compute_send_recv(local_rank, local_size);
+  printf("send_buf %p, recv_buf %p, coll_count %lu, dtype %d\n");
+  switch(t->stage) {
     case 0:
-      NCCLCHECK(ncclReduceScatter(t.send_buff, t.recv_buff, t.coll_count, t.dtype,
+      NCCLCHECK(ncclReduceScatter(t->send_buff, t->recv_buff, t->coll_count, t->dtype,
                                   ncclSum, comm, stream));
       break;
     case 1:
-      NCCLCHECK(ncclAllReduce(t.send_buff, t.recv_buff, t.coll_count, t.dtype,
+      NCCLCHECK(ncclAllReduce(t->send_buff, t->recv_buff, t->coll_count, t->dtype,
                               ncclSum, comm, stream));
       break;
     case 2:
-      NCCLCHECK(ncclAllGather(t.send_buff, t.recv_buff, t.coll_count, t.dtype,
+      NCCLCHECK(ncclAllGather(t->send_buff, t->recv_buff, t->coll_count, t->dtype,
                               comm, stream));
       break;
 
   }
-  CUDACHECK(cudaEventRecord(t.sync_e, stream));
+  CUDACHECK(cudaEventRecord(t->sync_e, stream));
 }
 
 /*
@@ -310,7 +310,7 @@ void intra_node_loop(ThdSafeQueue<coll_task*>& rs_tasks,
       if(i > 0) // i == 0 -> already poped
         rs_tasks.pop(&t);
 
-      launch_coll(*t, intra_comm, intra_stream);
+      launch_coll(t, intra_comm, intra_stream);
       ongoing_rs.push_back(t);
     }
 
@@ -324,7 +324,7 @@ void intra_node_loop(ThdSafeQueue<coll_task*>& rs_tasks,
     // start fetching tasks for intra all-gather
     for (int i = 0; i < t->parent->n_sub; ++i) {
       ag_tasks.pop(&t);
-      launch_coll(*t, intra_comm, intra_stream);
+      launch_coll(t, intra_comm, intra_stream);
       ongoing_ag.push_back(t);
     }
 
@@ -351,7 +351,7 @@ void inter_node_loop(ThdSafeQueue<coll_task*>& ar_tasks,
     for (int i = 0; i < t->parent->n_sub; ++i) {
       if (i > 0)
         ar_tasks.pop(&t);
-      launch_coll(*t, inter_comm, inter_stream);
+      launch_coll(t, inter_comm, inter_stream);
       ongoing_ar.push_back(t);
     }
 
@@ -364,7 +364,7 @@ void inter_node_loop(ThdSafeQueue<coll_task*>& ar_tasks,
   }
 }
 
-size_t chunk_size = 1000000; // 1M elements floats-> 4MB
+size_t chunk_nelem = 1000000; // 1M elements floats-> 4MB
 /*
   using thread with queue to async launch tasks
 */
@@ -390,14 +390,19 @@ void pipelined_hierarchy(int warm_up=5, int repeat=10) {
   for (int i = 0; i < warm_up + repeat; ++i) {
     auto start = std::chrono::high_resolution_clock::now();
     // create parent task and sub tasks
-    coll_task task(gpu_buffer, ncclFloat32, nelem, nelem / chunk_size);
+    coll_task task(gpu_buffer, ncclFloat32, nelem, nelem / chunk_nelem);
+    printf("task buff %p, dtype %d \n", task.buff, ncclFloat32);
     std::vector<coll_task*> sub_tasks;
     size_t offset = 0;
     for (int k = 0; k < task.n_sub; ++k) {
       void* chunk_buff = (char*)task.buff + offset;
-      size_t count = (k == task.n_sub - 1) ? nelem - offset : chunk_size;
+      size_t count = (k == task.n_sub - 1) ? nelem - offset : chunk_nelem;
       coll_task* sub_t = new coll_task(chunk_buff, task.dtype, count, 0);
       sub_t->parent = &task;
+      sub_t->buff = chunk_buff;
+      offset += chunk_nelem;
+      printf("sub task buff %p, count %lu, dtype %d \n", sub_t->buff,
+             sub_t->count, sub_t->dtype);
 
       rs_tasks.push(sub_t);
       sub_tasks.push_back(sub_t); // just for record
