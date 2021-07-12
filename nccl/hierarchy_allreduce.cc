@@ -267,9 +267,11 @@ struct coll_task {
   }
 };
 
-void launch_coll(coll_task* t, ncclComm_t& comm, cudaStream_t& stream) {
+void launch_coll(coll_task* t, ncclComm_t comm, cudaStream_t stream) {
   t->compute_send_recv(local_rank, local_size);
-  printf("send_buf %p, recv_buf %p, coll_count %lu, dtype %d\n");
+  if (rank == 0)
+    printf("send_buf %p, recv_buf %p, coll_count %lu, dtype %d\n", t->send_buff,
+           t->recv_buff, t->coll_count, t->dtype);
   switch(t->stage) {
     case 0:
       NCCLCHECK(ncclReduceScatter(t->send_buff, t->recv_buff, t->coll_count, t->dtype,
@@ -391,7 +393,9 @@ void pipelined_hierarchy(int warm_up=5, int repeat=10) {
     auto start = std::chrono::high_resolution_clock::now();
     // create parent task and sub tasks
     coll_task task(gpu_buffer, ncclFloat32, nelem, nelem / chunk_nelem);
-    printf("task buff %p, dtype %d \n", task.buff, ncclFloat32);
+    if (rank == 0)
+      printf("task buff %p, dtype %d \n", task.buff, ncclFloat32);
+
     std::vector<coll_task*> sub_tasks;
     size_t offset = 0;
     for (int k = 0; k < task.n_sub; ++k) {
@@ -401,8 +405,9 @@ void pipelined_hierarchy(int warm_up=5, int repeat=10) {
       sub_t->parent = &task;
       sub_t->buff = chunk_buff;
       offset += chunk_nelem;
-      printf("sub task buff %p, count %lu, dtype %d \n", sub_t->buff,
-             sub_t->count, sub_t->dtype);
+      if (rank == 0)
+        printf("sub task buff %p, count %lu, dtype %d \n", sub_t->buff,
+               sub_t->count, sub_t->dtype);
 
       rs_tasks.push(sub_t);
       sub_tasks.push_back(sub_t); // just for record
