@@ -248,26 +248,31 @@ struct coll_task {
 
   // different stage has different send/recv buffer
   void compute_send_recv(int local_rank, int local_size) {
+    this->coll_count = this->count / local_size; // assume dividable
     int coll_buff_size = this->coll_count * size_of_dtype(this->dtype);
+    // printf("dev %d, local_rank %d, coll_count %lu\n", device_idx, local_rank, this->coll_count);
+
     switch (this->stage) {
-      case 0:  // intra reduce scatter
+      case 0: {// intra reduce scatter
         this->send_buff = this->buff;
-        this->coll_count = this->count / local_size;
         this->recv_buff = (char*)this->buff + coll_buff_size * local_rank;
+        // printf("send_buff %p, recv_buff %p\n", this->send_buff, this->recv_buff);
         break;
-      case 1:                                         // inplace all-reduce
-        this->coll_count = this->count / local_size;  // assume dividable
+      }
+      case 1: {
         this->send_buff = (char*)this->buff + coll_buff_size * local_rank;
         this->recv_buff = this->send_buff;
         break;
-      case 2:
-        this->coll_count = this->count / local_size;
+      }  // inplace all-reduce
+      case 2: {
         this->send_buff = (char*)this->buff + coll_buff_size * local_rank;
         this->recv_buff = this->buff;
         break;
+      }
       default:
         break;
     }
+    
   }
 };
 
@@ -275,22 +280,28 @@ void launch_coll(coll_task* t, ncclComm_t comm, cudaStream_t stream) {
   CUDACHECK(cudaSetDevice(device_idx)); 
   t->compute_send_recv(local_rank, local_size);
   // if (rank == 0)
-  //   printf("send_buf %p, recv_buf %p, coll_count %lu, dtype %d, cudaStream %d \n", t->send_buff,
-  //          t->recv_buff, t->coll_count, t->dtype, stream);
+  // printf(
+  //     "t stage %d, send_buf %p, recv_buf %p, coll_count %lu, dtype %d, "
+  //     "cudaStream %d \n",
+  //     t->stage, t->send_buff, t->recv_buff, t->coll_count, t->dtype, stream);
+
   switch(t->stage) {
-    case 0:
+    case 0: {
+      size_t shard_size = t->coll_count * size_of_dtype(t->dtype);
       NCCLCHECK(ncclReduceScatter(t->send_buff, t->recv_buff, t->coll_count, t->dtype,
                                   ncclSum, comm, stream));
       break;
-    case 1:
-      NCCLCHECK(ncclAllReduce(t->send_buff, t->recv_buff, t->coll_count, t->dtype,
-                              ncclSum, comm, stream));
+    }
+    case 1: {
+      NCCLCHECK(ncclAllReduce(t->send_buff, t->recv_buff, t->coll_count,
+                              t->dtype, ncclSum, comm, stream));
       break;
-    case 2:
-      NCCLCHECK(ncclAllGather(t->send_buff, t->recv_buff, t->coll_count, t->dtype,
-                              comm, stream));
+    }
+    case 2: {
+      NCCLCHECK(ncclAllGather(t->send_buff, t->recv_buff, t->coll_count,
+                              t->dtype, comm, stream));
       break;
-
+    }
   }
   CUDACHECK(cudaEventRecord(t->sync_e, stream));
 }
