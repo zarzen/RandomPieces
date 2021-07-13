@@ -268,6 +268,10 @@ struct coll_task {
 };
 
 void launch_coll(coll_task* t, ncclComm_t comm, cudaStream_t stream) {
+  CUDACHECK(cudaSetDevice(device_idx)); 
+  // int dev;
+  // cudaGetDevice(&dev);
+  // printf("cuda current dev %d\n", dev);
   t->compute_send_recv(local_rank, local_size);
   if (rank == 0)
     printf("send_buf %p, recv_buf %p, coll_count %lu, dtype %d, cudaStream %d \n", t->send_buff,
@@ -389,7 +393,7 @@ void pipelined_hierarchy(int warm_up=5, int repeat=10) {
   std::thread inter_thd =
       std::thread(inter_node_loop, std::ref(ar_tasks), std::ref(ag_tasks),
                   group_comm, inter_stream);
-  
+
   float avg_time = 0;
   for (int i = 0; i < warm_up + repeat; ++i) {
     auto start = std::chrono::high_resolution_clock::now();
