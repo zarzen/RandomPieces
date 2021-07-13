@@ -11,6 +11,7 @@
 #include "thd_queue.h"
 #include <chrono>
 
+bool debug_flag = false;
 int rank;
 int nranks;
 int local_rank;
@@ -240,6 +241,9 @@ struct coll_task {
       ++n_complete;
     }
     cv.notify_all();
+    if (debug_flag && rank == 0) {
+      printf("completed one sub task, %d/%d\n", this->n_complete, this->n_sub);
+    }
   }
 
   // different stage has different send/recv buffer
@@ -269,13 +273,10 @@ struct coll_task {
 
 void launch_coll(coll_task* t, ncclComm_t comm, cudaStream_t stream) {
   CUDACHECK(cudaSetDevice(device_idx)); 
-  // int dev;
-  // cudaGetDevice(&dev);
-  // printf("cuda current dev %d\n", dev);
   t->compute_send_recv(local_rank, local_size);
-  if (rank == 0)
-    printf("send_buf %p, recv_buf %p, coll_count %lu, dtype %d, cudaStream %d \n", t->send_buff,
-           t->recv_buff, t->coll_count, t->dtype, stream);
+  // if (rank == 0)
+  //   printf("send_buf %p, recv_buf %p, coll_count %lu, dtype %d, cudaStream %d \n", t->send_buff,
+  //          t->recv_buff, t->coll_count, t->dtype, stream);
   switch(t->stage) {
     case 0:
       NCCLCHECK(ncclReduceScatter(t->send_buff, t->recv_buff, t->coll_count, t->dtype,
@@ -306,6 +307,8 @@ void intra_node_loop(ThdSafeQueue<coll_task*>& rs_tasks,
   std::vector<coll_task*> ongoing_rs;
   std::vector<coll_task*> ongoing_ag;
   while (true) {
+    ongoing_ag.clear();
+    ongoing_rs.clear();
     rs_tasks.pop(&t);
     // exit check
     if (t->stage == -1)
@@ -349,6 +352,7 @@ void inter_node_loop(ThdSafeQueue<coll_task*>& ar_tasks,
   coll_task* t;
   std::vector<coll_task*> ongoing_ar;
   while (true) {
+    ongoing_ar.clear();
     ar_tasks.pop(&t);
     if (t->stage == -1) 
       return;
@@ -384,8 +388,6 @@ void pipelined_hierarchy(int warm_up=5, int repeat=10) {
   cudaStream_t inter_stream;
   CUDACHECK(cudaStreamCreate(&intra_stream));
   CUDACHECK(cudaStreamCreate(&inter_stream));
-  if (rank == 0) 
-    printf("intra stream %d, inter stream %d\n", intra_stream, inter_stream);
 
   std::thread intra_thd =
       std::thread(intra_node_loop, std::ref(rs_tasks), std::ref(ar_tasks),
@@ -399,7 +401,7 @@ void pipelined_hierarchy(int warm_up=5, int repeat=10) {
     auto start = std::chrono::high_resolution_clock::now();
     // create parent task and sub tasks
     coll_task task(gpu_buffer, ncclFloat32, nelem, nelem / chunk_nelem);
-    if (rank == 0)
+    if (debug_flag && rank == 0)
       printf("task buff %p, dtype %d \n", task.buff, ncclFloat32);
 
     std::vector<coll_task*> sub_tasks;
@@ -411,7 +413,7 @@ void pipelined_hierarchy(int warm_up=5, int repeat=10) {
       sub_t->parent = &task;
       sub_t->buff = chunk_buff;
       elem_offset += chunk_nelem;
-      if (rank == 0)
+      if (debug_flag && rank == 0)
         printf("sub task buff %p, count %lu, dtype %d \n", sub_t->buff,
                sub_t->count, sub_t->dtype);
 
@@ -420,13 +422,15 @@ void pipelined_hierarchy(int warm_up=5, int repeat=10) {
     }
 
     task.wait();
+    if (debug_flag && rank == 0) {
+      printf("task nsub %d, n_complete %d \n", task.n_sub, task.n_complete);
+    }
     for (auto t : sub_tasks) {
       delete t;
     }
 
     auto end = std::chrono::high_resolution_clock::now();
     // record time
-    
     std::chrono::duration<double> elapsed_seconds = end-start;
     if (i >= warm_up) {
       avg_time += elapsed_seconds.count() / repeat;
@@ -434,13 +438,13 @@ void pipelined_hierarchy(int warm_up=5, int repeat=10) {
   }
 
   float ratio = 2 * (float(nsub_groups) - 1) / float(nsub_groups);
-  float bw = ratio * buffer_size / 1e9 / (avg_time * 1e-3);
+  float bw = ratio * buffer_size / 1e9 / (avg_time); 
   if (rank == 0)
     printf(
         "pipelined hierarchy: inter-node allreduce on buffer size %lu, bw %f "
         "GB/s, avg "
         "total time %f ms \n",
-        buffer_size, bw, avg_time);
+        buffer_size, bw, avg_time * 1e3);
 
   // at the end push a task with stage -1
   coll_task exit_task;
@@ -454,6 +458,9 @@ void pipelined_hierarchy(int warm_up=5, int repeat=10) {
 }
 
 int main(int argc, char* argv[]) {
+  if (const char* env_p = std::getenv("DEBUG"))
+    debug_flag = std::stoi(env_p) > 0? true: false;
+
   if (argc < 3) {
     std::cout << "input the size of local, and nelem of floats";
   }
