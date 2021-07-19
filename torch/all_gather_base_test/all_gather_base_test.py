@@ -109,15 +109,18 @@ def bench_changed_allgather_base(output_tensors,
                            rank,
                            world_size,
                            warm_up=5,
-                           repeat=10):
+                           repeat=10,
+                           split_launch=False):
     """"""
 
     ts = []
     for i in range(warm_up + repeat):
         s = time.time()
-        # c10d._all_gather_base(output_tensors, input_tensors)
-        for i in range(len(input_tensors)):
-            c10d._all_gather_base(output_tensors[i], input_tensors[i])
+        if not split_launch:
+            c10d._all_gather_base(output_tensors, input_tensors)
+        else:
+            for i in range(len(input_tensors)):
+                c10d._all_gather_base(output_tensors[i], input_tensors[i])
 
         torch.cuda.synchronize()
         e = time.time()
@@ -174,7 +177,7 @@ def main():
     # clean output tensors
     for t in output_tensors:
         t.zero_()
-    print_rank0('Using customized allgather')
+    print_rank0('Using _all_gather_base, launch in one group')
     bench_changed_allgather_base(output_tensors,
                            input_tensors,
                            partition_sizes,
@@ -183,6 +186,15 @@ def main():
     combined_tensor_custom = torch.cat(output_tensors)
     out_sum_custom = combined_tensor_custom.sum()
     print_rank0(f'output tensor sum {out_sum_custom}')
+
+    for t in output_tensors:
+        t.zero_()
+    print_rank0('using _all_gather_base, launch one by one')
+    bench_changed_allgather_base(output_tensors,
+                           input_tensors,
+                           partition_sizes,
+                           rank,
+                           world_size, split_launch=True)
 
     print_rank0(
         f'allgather results of torch API and customized op are close {combined_tensor_custom.allclose(combined_tensor_torch)}'
